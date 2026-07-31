@@ -1,0 +1,29 @@
+[project]
+name = "lumina-career-roi-prod"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Gishgiish", email = "gishnora@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.43.61",
+    "duckdb>=1.5.5",
+    "polars>=1.43.1",
+    "pyarrow>=25.0.0",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+lumina-career-roi-prod = "lumina_career_roi_prod:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.1",
+]
