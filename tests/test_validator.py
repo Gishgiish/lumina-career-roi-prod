@@ -25,12 +25,12 @@ class TestSalaryParsing:
         assert max_v == 110_000
 
     def test_hourly(self):
-        min_v, max_v, _, stype = _parse_salary("$50 - $70 per hour", "USD")
+        min_v, _max_v, _, stype = _parse_salary("$50 - $70 per hour", "USD")
         assert stype == "hourly"
         assert min_v == pytest.approx(104_000, rel=1e-3)  # 50 * 2080
 
     def test_eur_currency(self):
-        min_v, max_v, cur, _ = _parse_salary("€80,000 - €95,000", "EUR", "annual")
+        min_v, _max_v, cur, _ = _parse_salary("€80,000 - €95,000", "EUR", "annual")
         assert cur == "EUR"
         assert min_v == pytest.approx(80_000 * 1.08, rel=1e-3)
 

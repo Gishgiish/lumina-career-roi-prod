@@ -88,7 +88,7 @@ class BaseSource(abc.ABC):
                 pass
 
         try:
-            parsed = datetime.fromisoformat(str(dt_str).replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(str(dt_str))
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=UTC)
             return parsed.isoformat()
