@@ -1,0 +1,62 @@
+# docker-compose.yml
+services:
+  # 1. The Batch ETL Pipeline
+  etl-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lumina-etl
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs
+    command: uv run python scripts/orchestrator.py
+
+  # 2. The FastAPI Backend Service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: lumina-backend
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - etl-pipeline
+      - db
+    restart: unless-stopped
+
+  # 3. The Next.js Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lumina-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+
+  # 4. PostgreSQL for user data (Phase 3: Auth & Personalization)
+  db:
+    image: postgres:16-alpine
+    container_name: lumina-db
+    environment:
+      POSTGRES_USER: lumina
+      POSTGRES_PASSWORD: lumina_dev_password
+      POSTGRES_DB: lumina
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
