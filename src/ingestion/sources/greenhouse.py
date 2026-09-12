@@ -72,7 +72,7 @@ class GreenhouseSource(BaseSource):
                 )
                 response.raise_for_status()
                 data = response.json()
-            except Exception as exc:
+            except (httpx.HTTPError, ValueError) as exc:
                 logger.warning("Greenhouse: failed to fetch %s: %s", company, exc)
                 continue
 

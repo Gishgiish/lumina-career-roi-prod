@@ -88,7 +88,7 @@ class HackerNewsSource(BaseSource):
             response = httpx.get(ITEM_URL.format(comment_id), timeout=30)
             response.raise_for_status()
             return response.json()
-        except Exception:
+        except (httpx.HTTPError, ValueError) as exc:
             return None
 
     @staticmethod

@@ -54,7 +54,7 @@ class AdzunaSource(BaseSource):
                     )
                     response.raise_for_status()
                     data = response.json()
-                except Exception as exc:
+                except (httpx.HTTPError, ValueError) as exc:
                     logger.warning("Adzuna: failed to fetch %s page %d: %s", country, page, exc)
                     break
 

@@ -70,7 +70,7 @@ class LeverSource(BaseSource):
                 )
                 response.raise_for_status()
                 data = response.json()
-            except Exception as exc:
+            except (httpx.HTTPError, ValueError) as exc:
                 logger.warning("Lever: failed to fetch %s: %s", company, exc)
                 continue
 

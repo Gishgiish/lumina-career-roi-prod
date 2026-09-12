@@ -51,7 +51,7 @@ class USAJobsSource(BaseSource):
                 )
                 response.raise_for_status()
                 data = response.json()
-            except Exception as exc:
+            except (httpx.HTTPError, ValueError) as exc:
                 logger.warning("USAJobs: failed to fetch page %d: %s", page, exc)
                 break
 
