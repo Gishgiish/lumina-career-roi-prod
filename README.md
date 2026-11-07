@@ -5,13 +5,13 @@ Labor-market intelligence **prototype** that estimates salary premiums for techn
 > **Project status:** working demo, pre-production data layer.
 > The bundled demo runs on **synthetic seed data**. The live ingestion pipeline is implemented and the P0 data-path
 > defects (currency conversion, deduplication, Gold hygiene, salary-less handling, live salary parsing) are fixed.
-> One scratch live run (keyless sources) produced plausible salary statistics on 2026-11-07, but there is no
-> scheduler or data-freshness signal. See
+> Scratch live runs (keyless sources) produced plausible salary statistics and tighter skill extraction on 2026-11-07,
+> but there is no scheduler or data-freshness signal. See
 > [`CODEBASE_STATUS.md`](CODEBASE_STATUS.md) for the verified audit, evidence, and remediation plan.
 
 ## What it does
 
-- Maintains a curated taxonomy of **285 skills** with **293 aliases**.
+- Maintains a curated taxonomy of **285 skills** with **298 aliases**.
 - Ships **8 job-source adapters** (6 keyless, 2 key-gated).
 - Implements a medallion pipeline: Bronze NDJSON → Silver Parquet → 7 Gold marts.
 - Serves the marts through a FastAPI layer with 11 public endpoints.
@@ -70,7 +70,7 @@ make lint
 cd frontend && npm run lint && npm run build
 ```
 
-Current status: 155 backend tests pass, `uv run ruff check src/ scripts/ tests/` is clean, and frontend
+Current status: 168 backend tests pass, `uv run ruff check src/ scripts/ tests/` is clean, and frontend
 lint/build pass.
 
 ### 6. Run against an isolated data root (optional)
@@ -172,9 +172,9 @@ registered; the two key-gated sources are skipped.
 
 ## Testing
 
-- Backend: 11 test files, 155 tests passing.
-- Covered: Gold builders, Silver normalization helpers, path resolution, validation, deduplication, the seed
-  script, and the API surface.
+- Backend: 11 test files, 168 tests passing.
+- Covered: Gold builders, Silver normalization and skill extraction, taxonomy extraction, path resolution, validation,
+  deduplication, the seed script, and the API surface.
 - Not covered: `orchestrator.py` and six of the eight source adapters (Adzuna and a HackerNews currency-contract test
   have coverage).
 - Gold builders, path resolution, and the seed script have dedicated unit/subprocess tests (`test_gold.py`,
@@ -222,8 +222,10 @@ The full, evidence-based list is in [`CODEBASE_STATUS.md`](CODEBASE_STATUS.md). 
 - Salary parsing has known edge cases: dot-grouped thousands (`80.000 EUR`) and European decimal commas (`$35,3k`)
   are not handled, `¥` defaults to CNY when the string contains `cn` anywhere, otherwise JPY, and HackerNews hourly
   rates whose period suffix is stripped (`$55 - $75`) are left unparsed.
-- Skill extraction is keyword/heuristic, so it has false positives and misses. Title acronym restoration uses a finite
-  explicit list.
+- Skill extraction is keyword/heuristic, so it has false positives and misses. Ambiguous one-word skills
+  (`Go`/`C`/`R`) now require language context and `Hiring` is no longer a skill, but generic soft skills still
+  over-count (Communication, Cross-functional Collaboration, Strategic Planning). Title acronym restoration uses a
+  finite explicit list.
 - Salary-based marts cover only postings with a parseable salary; the seed demo coverage is 87.5%, while the
   keyless live run observed 2.9% (Greenhouse and Arbeitnow publish no salary).
 - Demand and skill co-occurrence counts ignore postings with a null `external_id`; skill-combination keys are

@@ -6,6 +6,8 @@ Maps various skill names/aliases to canonical skill names, organized by
 category. This is used to extract skills from job postings, normalize
 skills from different sources, and power the ROI marts.
 """
+import html
+import re
 from dataclasses import dataclass, field
 
 
@@ -77,7 +79,7 @@ SKILLS: list[Skill] = [
     Skill("FastAPI", "Web Development", ()),
     Skill("Express.js", "Web Development", ("express", "expressjs")),
     Skill("NestJS", "Web Development", ("nest.js",)),
-    Skill("Ruby on Rails", "Web Development", ("rails",)),
+    Skill("Ruby on Rails", "Web Development", ("rails", "ruby/rails")),
     Skill("Laravel", "Web Development", ()),
     Skill("Spring Boot", "Web Development", ("spring", "spring framework")),
     Skill("ASP.NET", "Web Development", (".net core", ".net 6", ".net 7", ".net 8")),
@@ -137,7 +139,7 @@ SKILLS: list[Skill] = [
     Skill("Data Visualization", "Data & Analytics", ("data viz", "d3.js", "d3")),
 
     # ========== Machine Learning & AI ==========
-    Skill("Machine Learning", "Machine Learning & AI", ("ml",)),
+    Skill("Machine Learning", "Machine Learning & AI", ("ml", "ai/ml")),
     Skill("Deep Learning", "Machine Learning & AI", ("dl",)),
     Skill("PyTorch", "Machine Learning & AI", ()),
     Skill("TensorFlow", "Machine Learning & AI", ("keras",)),
@@ -182,7 +184,7 @@ SKILLS: list[Skill] = [
     Skill("CircleCI", "Cloud & DevOps", ()),
     Skill("ArgoCD", "Cloud & DevOps", ("argo cd", "gitops")),
     Skill("Helm", "Cloud & DevOps", ("helm charts",)),
-    Skill("Linux", "Cloud & DevOps", ("linux administration", "unix")),
+    Skill("Linux", "Cloud & DevOps", ("linux administration", "unix", "linux/unix")),
     Skill("Networking", "Cloud & DevOps", ("tcp/ip", "load balancing", "vpc")),
     Skill("Monitoring", "Cloud & DevOps", ("observability", "prometheus", "datadog")),
     Skill("ELK Stack", "Cloud & DevOps", ("elasticsearch", "logstash", "kibana", "elastic stack")),
@@ -272,7 +274,9 @@ SKILLS: list[Skill] = [
     Skill("Mentoring", "Leadership", ("mentorship", "coaching")),
     Skill("Strategic Planning", "Leadership", ("strategy",)),
     Skill("Cross-functional Collaboration", "Leadership", ("cross functional",)),
-    Skill("Hiring", "Leadership", ("recruiting", "talent acquisition")),
+    # "Hiring" itself is excluded: the verb appears in nearly every posting and
+    # swamped the demand signal. Only recruiting-specific terms count.
+    Skill("Recruiting", "Leadership", ("recruiting", "talent acquisition", "technical recruiting")),
     Skill("Performance Management", "Leadership", ("performance reviews",)),
 
     # ========== Communication & Soft Skills ==========
@@ -287,7 +291,7 @@ SKILLS: list[Skill] = [
     Skill("German", "Communication", ("german language",)),
 
     # ========== Design & UX ==========
-    Skill("UI/UX Design", "Design & UX", ("user experience", "user interface", "ux design", "ui design")),
+    Skill("UI/UX Design", "Design & UX", ("user experience", "user interface", "ux design", "ui design", "ui/ux")),
     Skill("Figma", "Design & UX", ()),
     Skill("Adobe XD", "Design & UX", ()),
     Skill("Sketch", "Design & UX", ()),
@@ -340,6 +344,130 @@ for skill in SKILLS:
     SKILLS_BY_CATEGORY.setdefault(skill.category, []).append(skill)
 
 
+# Skill names that are also common English words or single letters. These are
+# matched from free text only when the surrounding text identifies them as a
+# programming language; tags and unambiguous aliases ("golang", "R language")
+# are always trusted.
+_AMBIGUOUS_SURFACES = frozenset({"c", "r", "go"})
+
+_AMBIGUOUS_PATTERNS = {
+    # Hyphenated prose ("go-to-market", "c-suite") is not a language.
+    "go": re.compile(r"(?<![\w-])go(?![\w-])", re.IGNORECASE),
+    "c": re.compile(r"(?<![\w+#-])c(?![\w+#-])", re.IGNORECASE),
+    "r": re.compile(r"(?<![\w-])r(?![\w-])", re.IGNORECASE),
+}
+
+_OTHER_LANGUAGE_RE = re.compile(
+    r"(?<![\w])(?:python|java(?:script)?|typescript|rust|c\+\+|c#|scala|kotlin|"
+    r"ruby|php|swift|sql|matlab|julia|stata|sas|golang|node(?:\.?js)?)(?![\w])",
+    re.IGNORECASE,
+)
+_LEADING_CUE_RE = re.compile(
+    r"(?:\bin|\bwith|\busing|\bknowledge of|\bproficien\w+ in|"
+    r"\bexperience (?:in|with)|\blanguages?:\s*|\bstack:\s*)\s*$",
+    re.IGNORECASE,
+)
+_TRAILING_CUE_RE = re.compile(
+    r"\s*(?:developer|engineer|programmer|lang(?:uage)?)\b",
+    re.IGNORECASE,
+)
+
+# "We go to market/live/forward" is the English verb, not the language.
+_GO_PROSE_RE = re.compile(
+    r"\s+(?:to|live|forward|ahead|back|through|beyond|deep|deeper|further|"
+    r"fast|faster|big|global|viral|public|mainstream)\b",
+    re.IGNORECASE,
+)
+# "R&D" is research and development, not the R language.
+_R_AND_D_RE = re.compile(r"\s*&\s*d\b", re.IGNORECASE)
+
+_MARKUP_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+_GAP_TOKEN_RE = re.compile(r"[a-z0-9.#+]+")
+# List connectors and short prepositions that may sit between two languages:
+# "Java, Go, C#, or Rust", "Ruby on Rails and Go", Dutch "Python en/of R".
+_GAP_WORDS = frozenset(
+    {"or", "and", "nor", "plus", "etc", "on", "of", "the", "a", "an", "en", "und", "et"}
+)
+
+# Aliases that contain "/" cannot be produced by the tokenizer, which splits on
+# "/", so match them directly against the cleaned text.
+_SLASH_ALIAS_LOOKUP: dict[str, Skill] = {
+    alias: skill for alias, skill in _ALIAS_LOOKUP.items() if "/" in alias
+}
+
+
+def _clean_text(raw: str) -> str:
+    """Unescape HTML entities so entity-split words still match.
+
+    Tags are left in place: removing them also removes link URLs, which are a
+    real source of "Git"/"GitHub" mentions. The ambiguous-token gate below
+    keeps markup attribute fragments such as ``c-link`` from matching "C".
+    """
+    if not raw:
+        return ""
+    return html.unescape(raw)
+
+
+def _list_gap_is_clean(gap: str) -> bool:
+    """Return True when *gap* is only list syntax between two language names.
+
+    Markup is ignored and another skill name is allowed, so
+    ``java, go, c#, or rust`` and ``ruby on rails and go`` both qualify.
+    Anything else means the two names are separated by prose, not a list.
+    """
+    gap = _MARKUP_TAG_RE.sub(" ", gap.lower())
+    if len(gap) > 60 or re.search(r"[.!?](?:\s|$)", gap):
+        return False
+    for token in _GAP_TOKEN_RE.findall(gap):
+        if token in _GAP_WORDS or normalize_skill(token) is not None:
+            continue
+        return False
+    return True
+
+
+def _ambiguous_language_match(text: str, surface: str) -> bool:
+    """Return True when ``surface`` is used as a programming language."""
+    pattern = _AMBIGUOUS_PATTERNS[surface]
+    for match in pattern.finditer(text):
+        before = text[max(0, match.start() - 40):match.start()]
+        after = text[match.end():match.end() + 40]
+        if surface == "go" and _GO_PROSE_RE.match(after):
+            continue
+        if surface == "r" and _R_AND_D_RE.match(after):
+            continue
+        if _LEADING_CUE_RE.search(before) or _TRAILING_CUE_RE.match(after):
+            return True
+        for other in _OTHER_LANGUAGE_RE.finditer(
+            text, max(0, match.start() - 60), min(len(text), match.end() + 60)
+        ):
+            if other.start() >= match.end():
+                gap = text[match.end():other.start()]
+            elif other.end() <= match.start():
+                gap = text[other.end():match.start()]
+            else:
+                continue
+            if _list_gap_is_clean(gap):
+                return True
+    return False
+
+
+def _ngram_candidates(text: str) -> set[str]:
+    """Collect unique 1-, 2-, and 3-word candidates from lowercase text."""
+    tokens = re.findall(r"[a-z0-9.#+]+", text.lower())
+    candidates: set[str] = set()
+    for i in range(len(tokens)):
+        candidates.add(tokens[i])
+        if i + 1 < len(tokens):
+            candidates.add(f"{tokens[i]} {tokens[i + 1]}")
+        if i + 2 < len(tokens):
+            candidates.add(f"{tokens[i]} {tokens[i + 1]} {tokens[i + 2]}")
+    return candidates
+
+
+def _contains_slash_alias(text: str, alias: str) -> bool:
+    return re.search(r"(?<![\w/])" + re.escape(alias) + r"(?![\w/])", text) is not None
+
+
 def normalize_skill(name: str) -> str | None:
     """
     Takes a raw skill name (from a source's tags, or extracted from text)
@@ -352,7 +480,6 @@ def normalize_skill(name: str) -> str | None:
     if candidate in _ALIAS_LOOKUP:
         return _ALIAS_LOOKUP[candidate].canonical
     # Try removing parenthetical qualifiers like "(2+ years)"
-    import re
     candidate_clean = re.sub(r"[\(\[].*?[\)\]]", "", candidate).strip()
     if candidate_clean in _ALIAS_LOOKUP:
         return _ALIAS_LOOKUP[candidate_clean].canonical
@@ -365,46 +492,49 @@ def extract_skills(text: str, extra_terms: list[str] | None = None) -> list[str]
     source tags, etc.).
 
     Matching strategy:
-      1. Tokenize the text on word boundaries.
-      2. For each token and multi-word phrase up to 3 words, check the alias table.
-      3. Return deduplicated, canonical skill names.
+      1. Unescape HTML entities and treat source tags separately: tags are
+         curated, so ambiguous names there ("go", "c") are trusted.
+      2. In description text, ambiguous one-word skills are accepted only with
+         language context; slash aliases are matched directly.
+      3. For each token and multi-word phrase up to 3 words, check the alias
+         table, then return deduplicated, canonical skill names.
 
     This is a simple but effective keyword-based extractor. For a more
     sophisticated approach in the future, this could be swapped with a
     spaCy NER pipeline or skillNer.
     """
-    import re
+    description = _clean_text(text or "").lower()
+    tags = [term.strip().lower() for term in (extra_terms or []) if term and term.strip()]
 
-    if not text and not extra_terms:
+    if not description and not tags:
         return []
 
-    # Add explicit tags to the search surface
-    search_text = (text or "").lower()
-    if extra_terms:
-        search_text += " " + " ".join(extra_terms)
-
     found: list[str] = []
-
-    # Collect all unique candidate tokens and n-grams (up to 3 words)
-    tokens = re.findall(r"[a-z0-9.#+]+", search_text)
-    candidates: set[str] = set()
-    for i in range(len(tokens)):
-        # 1-gram
-        candidates.add(tokens[i])
-        # 2-gram
-        if i + 1 < len(tokens):
-            candidates.add(f"{tokens[i]} {tokens[i+1]}")
-        # 3-gram
-        if i + 2 < len(tokens):
-            candidates.add(f"{tokens[i]} {tokens[i+1]} {tokens[i+2]}")
-
-    # Look up each candidate (and alias) in the taxonomy
     seen: set[str] = set()
-    for candidate in candidates:
-        canonical = normalize_skill(candidate)
+
+    def add(canonical: str | None) -> None:
         if canonical and canonical.lower() not in seen:
             seen.add(canonical.lower())
             found.append(canonical)
+
+    # Source tags are curated; trust them even for ambiguous names.
+    for tag in tags:
+        add(normalize_skill(tag))
+    for candidate in _ngram_candidates(" ".join(tags)):
+        add(normalize_skill(candidate))
+
+    # Slash aliases ("CI/CD", "UI/UX", "A/B Testing") are invisible to the
+    # tokenizer because it splits on "/".
+    for alias, skill in _SLASH_ALIAS_LOOKUP.items():
+        if _contains_slash_alias(description, alias):
+            add(skill.canonical)
+
+    for candidate in _ngram_candidates(description):
+        if candidate in _AMBIGUOUS_SURFACES and not _ambiguous_language_match(
+            description, candidate
+        ):
+            continue
+        add(normalize_skill(candidate))
 
     # Sort for stable output
     found.sort()

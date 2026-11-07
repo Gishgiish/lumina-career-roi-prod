@@ -1,8 +1,8 @@
 # Lumina Career ROI — Codebase Status and Audit
 
 **Prepared:** 2026-11-04\
-**Last updated:** 2026-11-07 — Steps 1–3 committed; Step 4 live scratch run executed three times, its P0 salary defects fixed and re-verified; see §10.\
-**Baseline:** commit `42c3218` (`Add data-correctness remediation (Steps 1-3) and review fixes`) plus the Step 4 salary fixes in the current HEAD commit; working tree clean
+**Last updated:** 2026-11-07 — Steps 1–5 committed; Step 4 live scratch runs fixed the P0 salary path, and Step 5 tightened skill-extraction precision; see §10.\
+**Baseline:** commit `42c3218` (`Add data-correctness remediation (Steps 1-3) and review fixes`) plus the Step 4 and Step 5 commits; working tree clean
 **Method:** full read of backend, pipeline, frontend, infra, tests, and CI; inspection of the generated data; execution of
 the test, lint, and build suites; direct reproduction of the defects listed here.
 
@@ -27,13 +27,15 @@ heuristic skill extraction, and one unscheduled scratch live run (not committed 
 **Bottom line:** do not treat the current output as production labor-market intelligence. The synthetic demo is now
 internally consistent; real ingestion, freshness, and serving hardening remain.
 
-**Step status (2026-11-07): Steps 1, 2, 3, and 4 are complete.** Backend lint and tests are green (155 tests),
+**Step status (2026-11-07): Steps 1–5 are complete.** Backend lint and tests are green (168 tests),
 scratch data/state isolation exists, the seed and pipeline share one Gold builder, currency and dedup regressions are
 fixed, and Gold hygiene plus the salary-less policy are implemented and covered by tests. Step 4 ran three times into
 scratch: run 1 exposed corrupt live salaries; after the HN parsing, salary-period, and plausibility fixes run 2 looked
 plausible, but review found that description-wide bare-amount matching still treated funding, savings, and revenue
 figures as salaries. Bare amounts are now trusted only in a pipe header or on payroll-vocabulary lines, and run 3
-re-verified the result. Remaining gaps are skill extraction, source health, coverage, and freshness.
+re-verified the result. Step 5 then tightened skill extraction: ambiguous one-word skills (`Go`/`C`/`R`) require
+language context, `Hiring` is no longer a skill, tags stay authoritative, and slash aliases match. Remaining gaps are
+generic soft-skill over-counting, source health, coverage, and freshness.
 
 ---
 
@@ -41,16 +43,16 @@ re-verified the result. Remaining gaps are skill extraction, source health, cove
 
 | Area | Verified fact |
 |---|---|
-| Git | `main`, 6 commits, no branches. HEAD is the Step 4 salary-fix commit; the previous baseline was `42c3218`, and the 2026-11-04 review baseline was `e1848d3` plus uncommitted work |
-| Uncommitted changes | None after the Step 4 salary-fix commit (2026-11-07) |
+| Git | `main`, 7 commits, no branches. HEAD is the Step 5 skill-precision commit; the previous baselines were `42c3218` and the Step 4 salary fix, and the 2026-11-04 review baseline was `e1848d3` plus uncommitted work |
+| Uncommitted changes | None after the Step 5 commit (2026-11-07) |
 | Documentation cleanup | On 2026-11-04 this status file was added, `README.md` was rewritten to match the code, and `AUDIT_PLAN.md`, `lumina_audit_report.md`, and `frontend/README.md` were deleted. `42c3218` also records those two audit-file deletions |
-| Backend tests | `155 passed` (was `144` after the first Step 4 review, `135` after Step 3, `109` after Step 2.2, `102` after 2.1, `85` after Step 1, `59` before Step 1) |
+| Backend tests | `168 passed` (was `166` after Step 5's first pass, `155` after Step 4, `144` after the first Step 4 review, `135` after Step 3, `109` after Step 2.2, `102` after 2.1, `85` after Step 1, `59` before Step 1) |
 | Backend lint | **Passes.** `uv run ruff check src/ scripts/ tests/` is clean. `I001` fixed 2026-11-07; `BLE001` was already fixed in the working tree |
 | Frontend lint | `npm run lint` passes |
 | Frontend build | `npm run build` passes; Next.js performs TypeScript checking during the build |
 | API | All 11 public endpoints respond against seed data and against the scratch live run (1.8–17.5 ms per request in-process) |
 | Data | 800 synthetic rows, 6 sources, 82 skills represented, 700 salaried jobs (87.5% coverage), 7 Gold marts, files regenerated 2026-11-07 |
-| Live pipeline evidence | **Scratch run only** (2026-11-07, keyless 6, run 3): 5 sources produced data, 3,517 Bronze → 3,269 Silver, 96 salaried (2.9%), 7 Gold marts. Kept under `/tmp/opencode/lumina-step4`; default demo data and watermark untouched. Lever yielded zero jobs (all boards 404) |
+| Live pipeline evidence | **Scratch run only** (2026-11-07, keyless 6, run 4): 5 sources produced data, 3,518 Bronze → 3,269 Silver, 96 salaried (2.9%), 251 skills, 7 Gold marts. Kept under `/tmp/opencode/lumina-step4`; default demo data and watermark untouched. Lever yielded zero jobs (all boards 404) |
 | PostgreSQL | Provisioned in compose; zero application code uses it |
 | Scheduling | No cron, CI schedule, or Prefect deployment in the repository |
 | Frontend tests | None |
@@ -328,8 +330,9 @@ now accepted only in a pipe-delimited header or on a line with payroll vocabular
 amounts remain trusted anywhere.
 
 Remaining after the fix: HN hourly/monthly rates whose period suffix is stripped (`$55 - $75`, `$70-150`, `€5,000`)
-are extracted but stay unparsed; comma-decimal values such as `"$35,3k"` are read as `353k`; skill extraction still
-yields `"Hiring"`/standalone `"Go"` false positives; and full-set combos still reach 49 skills. These are P1.
+are extracted but stay unparsed; comma-decimal values such as `"$35,3k"` are read as `353k`; the Step 5 skill
+precision pass still leaves generic soft skills over-counted (see D-08); and full-set combos still reach 48 skills.
+These are P1.
 
 ### P1 — User-visible defects, freshness, and business accuracy
 
@@ -403,26 +406,50 @@ proper noun not listed in `TITLE_ACRONYMS` is still title-cased (`GCP` → `Gcp`
 
 #### D-08 — Skill extraction has false positives and misses
 
-Evidence:
+**Fixed in Step 5 (2026-11-07).** Recorded here for history.
 
-- Every standalone English word “go” matches the Go language:
+Original evidence:
+
+- Every standalone English word “go” matched the Go language:
   `src/ingestion/skills_taxonomy.py:28`, extractor at `:362-411`.
-- The tokenizer `[a-z0-9.#+]+` excludes `/`, so aliases such as `CI/CD`, `UI/UX Design`, and `A/B Testing` cannot
+- The tokenizer `[a-z0-9.#+]+` excluded `/`, so aliases such as `CI/CD`, `UI/UX Design`, and `A/B Testing` could not
   match from their slash forms: `src/ingestion/skills_taxonomy.py:389`.
-- `extra_terms` are appended without lowercasing while the tokenizer only matches lowercase, so capitalized tags can
-  be ignored: `src/ingestion/skills_taxonomy.py:382-384`.
+- `extra_terms` were appended without lowercasing while the tokenizer only matched lowercase, so capitalized tags
+  could be ignored: `src/ingestion/skills_taxonomy.py:382-384`.
 
-Reproduced:
+Original reproduction:
 
 ```python
-extract_skills("We go to market with our product")  # -> ["Go"]
-extract_skills("Senior C developer")                # -> ["C"]
+extract_skills("We go to market with our product")       # -> ["Go"]
+extract_skills("Experience selling to C-suite buyers")   # -> ["C"]
 ```
 
-Step 4 confirmed this at live scale: "Hiring" is the #2 demand skill (43.3% of jobs with skills) and standalone "Go"
-is #5 (27.1%). Full-description extraction also produces combos of up to 49 skills.
+Step 4 confirmed this at live scale: "Hiring" was the #2 demand skill (43.3%) and standalone "Go" was #5 (27.1%).
+Full-description extraction also produced combos of up to 49 skills.
 
-Status: **open.**
+Resolution:
+
+- Ambiguous one-word skills (`c`, `r`, `go`) in description text require language context: a language cue next to the
+  token (`go developer`, `with c`, `r language`, `go lang`) or another language in the same list clause
+  (`Java, Go, C#, or Rust`). The clause test allows only markup, list separators, connectors (`and`/`or`, Dutch
+  `en/of`), and other skill names between the two languages, so prose such as "go to market and build in Python" no
+  longer qualifies. Hyphenated prose (`go-to-market`, `c-suite`), verb forms (`go to/live/deeper`), and `R&D` are
+  rejected. Source tags remain authoritative, so `extra_terms=["go"]` still yields Go.
+- `Hiring` is no longer a skill; `Recruiting` / `Talent Acquisition` remain. The verb appeared in nearly every posting.
+- Source tags are lowercased before matching, and slash aliases (`CI/CD`, `A/B Testing`, `UI/UX`) are matched directly
+  because the tokenizer splits on `/`.
+- HTML entities are unescaped before matching so entity-split words still match; link URLs are preserved.
+
+Verified in run 4: `Hiring` absent; Go `871 → 320` (10.0%), C `836 → 82` (2.6%), R `205 → 78` (2.4%); zero
+non-ambiguous skills lost matches; mean skills/job `7.95 → 7.30`; max combo `49 → 48`. Coverage:
+`tests/test_taxonomy.py`, `tests/test_silver.py::TestExtractSkillsList`.
+
+**Residual warning:** generic soft skills still dominate demand — Communication 50.3%, Cross-functional Collaboration
+41.8%, Strategic Planning 40.6%, Monitoring 25.4%, Mentoring 20.6%. These are legitimate phrases but are over-counted
+by full-prose matching. `Recruiting` (17.1%) is also inflated by process/team prose (“recruiting team”, “recruitment
+process”), even though the “hiring” verb is gone. Deciding whether ROI/demand should be technical-only, and how to gate
+recruiting, is the next P1, not part of Step 5. Multi-word slash tags (`ruby/rails`) still need explicit aliases, and
+combos can reach 48 because descriptions mention many tools.
 
 #### D-09 — Seed and production Gold are separate implementations that have diverged
 
@@ -465,15 +492,15 @@ Status: **open.**
 
 #### T-01 — Test and CI coverage does not protect the risky code
 
-Updated after Step 4 (2026-11-07):
+Updated after Step 5 (2026-11-07):
 
-- 155 backend tests pass (20 new Step 4 regressions: HN HTML parsing, bounded salary tokens, `href` not hourly,
-  adapter-declared salary type, implausible-salary rejection, funding/savings/revenue amounts not becoming salary,
-  body salary behind a pay cue, body salary ranges, range-suffix propagation).
-- Gold builders (`tests/test_gold.py`), Silver normalization (`tests/test_silver.py`), path/state resolution
-  (`tests/test_paths.py`), the seed script (`tests/test_seed.py`, subprocess smoke), currency detection/parsing plus
-  the Adzuna and HackerNews currency contracts (`tests/test_validator.py`, `tests/test_adzuna.py`,
-  `tests/test_hackernews.py`), and deduplication (`tests/test_dedup.py`) now have coverage.
+- 168 backend tests pass (20 Step 4 regressions plus 13 Step 5 regressions: ambiguous `Go`/`C`/`R` context gating,
+  `Hiring` removal, tag casing, slash aliases, markup attributes, and a Silver-level skill-extraction boundary test).
+- Gold builders (`tests/test_gold.py`), Silver normalization and skill extraction (`tests/test_silver.py`), taxonomy
+  extraction (`tests/test_taxonomy.py`), path/state resolution (`tests/test_paths.py`), the seed script
+  (`tests/test_seed.py`, subprocess smoke), currency detection/parsing plus the Adzuna and HackerNews currency
+  contracts (`tests/test_validator.py`, `tests/test_adzuna.py`, `tests/test_hackernews.py`), and deduplication
+  (`tests/test_dedup.py`) now have coverage.
 - Still untested: `orchestrator.py` and six of the eight source adapters (`remoteok`, `remotive`, `arbeitnow`,
   `greenhouse`, `lever`, `usajobs`). Adzuna and HackerNews now have targeted tests.
 - API tests still mock the data loader (plus one loader-level precision test).
@@ -609,9 +636,9 @@ These are product decisions, not code decisions:
 
 ### Recommended: finish the data-correctness pass before adding features
 
-Steps 1–4 are done. Remaining is P1 hardening, not another correctness gate: skill-extraction precision (D-08),
-source health (Lever/Greenhouse boards), salary coverage from salary-less sources, comma-decimal parsing, and a
-data-as-of manifest/scheduler (O-01). Estimate: **~1–2 focused engineering days**.
+Steps 1–5 are done. Remaining is P1 hardening, not another correctness gate: soft-skill tiering in the ROI/demand
+marts (D-08 residual), source health (Lever/Greenhouse boards), salary coverage from salary-less sources,
+comma-decimal parsing, and a data-as-of manifest/scheduler (O-01). Estimate: **~1–2 focused engineering days**.
 
 #### Step 1 — Green baseline and safe test environment — **COMPLETE (2026-11-07)**
 
@@ -807,7 +834,33 @@ PYTHONPATH=. uv run python /tmp/opencode/lumina-step4/run_stages.py
 Full report: `/tmp/opencode/lumina-step4/results.md`. Granular tracker:
 `/tmp/opencode/lumina-step4-plan.md` (both temporary, not committed).
 
-Remaining for a trustworthy path: skill extraction false positives (D-08), dead/zero-yield sources (Lever), low salary
+#### Step 5 — Skill-extraction precision — **COMPLETE (2026-11-07)**
+
+Delivered:
+
+- Ambiguous-token gate: `Go`, `C`, and `R` in description text require language context; explicit tags are trusted.
+- List context is clause-local (only markup, separators, connectors, and other skill names may sit between the two
+  languages), so verb `go` and `R&D` next to unrelated tool names are not accepted.
+- `Hiring` removed as a skill; `Recruiting` / `Talent Acquisition` retained.
+- Source tags lowercased, slash aliases (`CI/CD`, `A/B Testing`, `UI/UX`) matched directly, HTML entities unescaped.
+- Run 4 (same keyless-6 scope and isolation): 3,518 Bronze → 3,269 Silver, 96 salaried (2.9%), 251 skills, 7 marts;
+  salary metrics unchanged (`$153,903.27` average, `$157,500` median). Skill signal: `Hiring` absent, Go 10.0%,
+  C 2.6%, R 2.4%, zero non-ambiguous skills lost, mean skills/job 7.30 (was 7.95).
+- Structural checks pass (0 demand mismatches, 0 related dupes/order violations, 0 bucket violations); 11/11 API
+  endpoints 200; default data and R2 untouched.
+
+Evidence:
+
+```bash
+PYTHONPATH=. uv run pytest tests/ -q          # 168 passed
+uv run ruff check src/ scripts/ tests/       # All checks passed
+```
+
+Remaining after Step 5: generic soft skills still dominate demand (Communication 50.3%, Cross-functional
+Collaboration 41.8%, Strategic Planning 40.6%); a technical-vs-soft tiering decision is the next P1. Combos still reach
+48 skills, and slash tags such as `ruby/rails` need explicit aliases.
+
+Remaining for a trustworthy path: soft-skill tiering (D-08 residual), dead/zero-yield sources (Lever), low salary
 coverage from salary-less sources, comma-decimal salary parsing (`$35,3k`), and no data-as-of manifest. Do not run
 `make ingest` for reruns: `scripts/orchestrator.py` ends with `task_sync_to_cloud()` and uploads to R2.
 
@@ -820,7 +873,7 @@ coverage from salary-less sources, comma-decimal salary parsing (`$35,3k`), and 
 - [x] Salary buckets are in numeric order.
 - [x] Related-skill responses contain no duplicates.
 - [x] Title casing preserves acronyms.
-- [x] One real ingestion produces inspectable, plausible statistics (scratch run 3; salary coverage and skill noise
+- [x] One real ingestion produces inspectable, plausible statistics (scratch run 4; salary coverage and skill noise
   remain documented P1 gaps).
 - [ ] Gold has a data-as-of timestamp or manifest.
 - [x] The seed and production mart builders are the same code or are verified against each other.
@@ -893,8 +946,8 @@ PYTHONPATH=. uv run python scripts/seed_data.py            # 800 jobs, 700 salar
 Committed baseline (2026-11-07):
 
 ```bash
-git rev-list --count HEAD      # 6
-git log --oneline -1           # Step 4 live-ingestion salary fixes
+git rev-list --count HEAD      # 7
+git log --oneline -1           # Step 5 skill-extraction precision
 git status --short             # clean
 ```
 
@@ -923,6 +976,30 @@ market: total_jobs=3269, jobs_with_salary=96, salary_coverage_rate=0.0294,
 marts:  single_skill_roi=156, skill_demand=250, skill_overlap=74,
         skill_related=8189, salary_distribution=387, top_skills=10
 HN:     224 rows, 67 explicit salary tokens, 62 parsed, 0 hourly misclassified
+API:    11/11 endpoints returned 200
+```
+
+After Step 5 (2026-11-07, scratch run 4, same Bronze re-transformed with the final extractor):
+
+```bash
+PYTHONPATH=. uv run pytest tests/ -q          # 168 passed
+uv run ruff check src/ scripts/ tests/       # All checks passed
+
+# isolation:
+diff preflight-checksums.txt postflight_run4-final-checksums.txt   # identical
+grep -E "Cloud Sync|Uploading|R2" ingest_run4.log                  # no matches
+```
+
+Run 4 Gold check:
+
+```text
+market: total_jobs=3269, jobs_with_salary=96, salary_coverage_rate=0.0294,
+        total_unique_skills=251, average_salary_usd=153903.27,
+        median_salary_usd=157500.00, top_source_count=5
+marts:  single_skill_roi=156, skill_demand=251, skill_overlap=70,
+        skill_related=8062, salary_distribution=386, top_skills=10
+skills: Hiring absent; Go=320 (10.0%), C=82 (2.6%), R=78 (2.4%);
+        mean skills/job=7.30 (was 7.95); max combo=48 (was 49)
 API:    11/11 endpoints returned 200
 ```
 

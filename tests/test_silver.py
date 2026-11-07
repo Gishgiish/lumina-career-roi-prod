@@ -3,7 +3,11 @@
 
 import polars as pl
 
-from src.transformation.silver import _add_salary_metrics, _standardize_title
+from src.transformation.silver import (
+    _add_salary_metrics,
+    _extract_skills_list,
+    _standardize_title,
+)
 
 
 class TestStandardizeTitle:
@@ -29,6 +33,15 @@ class TestStandardizeTitle:
         df = pl.DataFrame({"title": titles})
         result = df.with_columns(_standardize_title())
         assert result["title"].to_list() == titles
+
+
+class TestExtractSkillsList:
+    def test_ambiguous_prose_is_ignored(self):
+        assert "Go" not in _extract_skills_list([], "We go to market.")
+        assert "C" not in _extract_skills_list([], "Experience selling to C-suite.")
+
+    def test_tags_are_authoritative(self):
+        assert "Go" in _extract_skills_list(["go"], "We go to market.")
 
 
 class TestAddSalaryMetrics:
