@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import polars as pl
 
+from src.transformation.gold import build_gold_marts
 from src.utils.paths import GOLD_DIR, SILVER_DIR, ensure_directories
 
 # Compact seed skill data: (avg_salary, popularity_weight)
@@ -91,6 +92,9 @@ def generate_seed_jobs(num_jobs: int = 800) -> pl.DataFrame:
         min_salary = avg_salary * random.uniform(0.85, 0.95)
         max_salary = avg_salary * random.uniform(1.05, 1.20)
 
+        # Make ~1 in 8 postings salary-less to exercise the demand-only path.
+        has_salary = i % 8 != 0
+
         title = random.choice(JOB_TITLES)
         company = random.choice(COMPANIES)
         source = random.choice(SOURCES)
@@ -111,11 +115,12 @@ def generate_seed_jobs(num_jobs: int = 800) -> pl.DataFrame:
             "description": desc,
             "location": location,
             "country": country,
-            "min_salary_usd": round(min_salary, 2),
-            "max_salary_usd": round(max_salary, 2),
-            "expected_salary_usd": round(avg_salary, 2),
+            "min_salary_usd": round(min_salary, 2) if has_salary else None,
+            "max_salary_usd": round(max_salary, 2) if has_salary else None,
+            "expected_salary_usd": round(avg_salary, 2) if has_salary else None,
+            "has_salary": has_salary,
             "salary_currency": "USD",
-            "salary_type": "annual",
+            "salary_type": "annual" if has_salary else "unknown",
             "posted_at": posted_at,
             "url": f"https://example.com/jobs/seed_{i}",
             "company": company,
@@ -125,96 +130,6 @@ def generate_seed_jobs(num_jobs: int = 800) -> pl.DataFrame:
 
     return pl.DataFrame(rows)
 
-
-def generate_seed_gold(silver_df: pl.DataFrame) -> None:
-    """Build Gold marts directly from the seed Silver data."""
-    ensure_directories()
-
-    salary_col = "expected_salary_usd"
-    overall_avg = silver_df.select(pl.col(salary_col).mean()).item()
-    df_exploded = silver_df.explode("skills_list", empty_as_null=True)
-
-    # Skill ROI Mart
-    df_skill = (
-        df_exploded
-        .group_by("skills_list")
-        .agg(
-            pl.col(salary_col).mean().alias("avg_salary"),
-            pl.col("external_id").count().alias("job_demand_count"),
-        )
-        .with_columns((pl.col("avg_salary") - overall_avg).alias("salary_premium"))
-        .rename({"skills_list": "skill"})
-        .sort("salary_premium", descending=True)
-    )
-    df_skill.write_parquet(GOLD_DIR / "single_skill_roi_mart.parquet")
-
-    # Overlap Mart
-    df_overlap = (
-        silver_df
-        .filter(pl.col("skills_list").list.len() >= 2)
-        .with_columns(
-            pl.col("skills_list").list.sort().list.join(", ").alias("skill_combo")
-        )
-        .group_by("skill_combo")
-        .agg(
-            pl.col(salary_col).mean().alias("combo_avg_salary"),
-            pl.col("external_id").count().alias("combo_demand_count"),
-        )
-        .with_columns((pl.col("combo_avg_salary") - overall_avg).alias("combo_premium"))
-        .sort("combo_premium", descending=True)
-    )
-    df_overlap.write_parquet(GOLD_DIR / "skill_overlap_mart.parquet")
-
-    # Market overview (all values as float to avoid mixed-type issues)
-    df_market = pl.DataFrame({
-        "metric": ["total_jobs", "total_unique_skills", "average_salary_usd", "median_salary_usd"],
-        "value": [
-            float(len(silver_df)),
-            float(df_skill.height),
-            round(float(overall_avg), 2),
-            round(float(silver_df.select(pl.col(salary_col).median()).item()), 2),
-        ],
-    })
-    df_market.write_parquet(GOLD_DIR / "market_overview_mart.parquet")
-
-    # Top skills by demand
-    df_skill.sort("job_demand_count", descending=True).head(10) \
-        .write_parquet(GOLD_DIR / "top_skills_mart.parquet")
-
-    # Related skills (co-occurrence)
-    df_related = (
-        df_exploded.rename({"skills_list": "skill_a"})
-        .join(
-            df_exploded.select(["external_id", "skills_list"]).rename({"skills_list": "skill_b"}),
-            on="external_id",
-            how="inner",
-        )
-        .filter(pl.col("skill_a") != pl.col("skill_b"))
-        .group_by(["skill_a", "skill_b"])
-        .agg(pl.len().alias("co_occurrence_count"))
-        .sort("co_occurrence_count", descending=True)
-    )
-    df_related.write_parquet(GOLD_DIR / "skill_related_mart.parquet")
-
-    # Salary distribution
-    df_salary_dist = (
-        df_exploded
-        .with_columns(
-            pl.when(pl.col(salary_col) < 50_000).then(pl.lit("< $50k"))
-            .when(pl.col(salary_col) < 75_000).then(pl.lit("$50k - $75k"))
-            .when(pl.col(salary_col) < 100_000).then(pl.lit("$75k - $100k"))
-            .when(pl.col(salary_col) < 125_000).then(pl.lit("$100k - $125k"))
-            .when(pl.col(salary_col) < 150_000).then(pl.lit("$125k - $150k"))
-            .when(pl.col(salary_col) < 200_000).then(pl.lit("$150k - $200k"))
-            .otherwise(pl.lit("$200k+"))
-            .alias("salary_bucket")
-        )
-        .group_by(["skills_list", "salary_bucket"])
-        .agg(pl.len().alias("job_count"))
-        .rename({"skills_list": "skill"})
-        .sort(["skill", "salary_bucket"])
-    )
-    df_salary_dist.write_parquet(GOLD_DIR / "salary_distribution_mart.parquet")
 
 
 def main():
@@ -226,7 +141,7 @@ def main():
     silver_df.write_parquet(SILVER_DIR / "jobs_silver.parquet")
     print(f"   -> Saved {len(silver_df)} seed jobs to Silver")
 
-    generate_seed_gold(silver_df)
+    build_gold_marts(silver_df, GOLD_DIR)
     print("   -> Saved all Gold data marts")
 
     print("\n✅ Seed data generation complete!")

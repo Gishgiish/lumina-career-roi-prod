@@ -51,6 +51,22 @@ def get_skill_overlap_data(limit: int | None = None) -> list[dict]:
     return _records_with_rounded_floats(df)
 
 
+def get_skill_demand_data(limit: int | None = None) -> list[dict]:
+    """Skill demand across all jobs, including salary-less postings.
+
+    Floats are not rounded to 2 decimals here: ``job_share`` is a fraction, so
+    two decimals would collapse e.g. 0.086 to 0.09.
+    """
+    df = _read_gold_mart("skill_demand_mart.parquet")
+    if df is None:
+        raise FileNotFoundError("Gold layer Skill Demand Mart not found.")
+    df = df.sort(["job_demand_count", "skill"], descending=[True, False])
+    df = df.with_columns(pl.col("job_share").round(6))
+    if limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
 def compare_skills(skills: list[str]) -> list[dict]:
     """Return ROI data for a specific list of skills."""
     all_data = get_single_skill_roi_data()
@@ -74,7 +90,7 @@ def get_related_skills(skill_name: str, limit: int = 10) -> list[dict]:
             related.append({"skill": row["skill_b"], "co_occurrence_count": row["co_occurrence_count"]})
         else:
             related.append({"skill": row["skill_a"], "co_occurrence_count": row["co_occurrence_count"]})
-    related.sort(key=lambda x: x["co_occurrence_count"], reverse=True)
+    related.sort(key=lambda x: (-x["co_occurrence_count"], x["skill"].lower()))
     return related[:limit]
 
 

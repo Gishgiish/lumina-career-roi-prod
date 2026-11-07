@@ -80,17 +80,20 @@ class AdzunaSource(BaseSource):
                     if max_posted is None or posted_at > max_posted:
                         max_posted = posted_at
 
-                    # Adzuna salary
+                    # Adzuna salary. Emit plain numeric ranges; the currency is
+                    # supplied separately as an ISO code below. Do not prefix
+                    # "$" here — it would make the parser guess USD for GBP,
+                    # EUR, INR, and every other non-USD country.
                     salary_min = item.get("salary_min")
                     salary_max = item.get("salary_max")
                     salary_raw = None
                     if salary_min or salary_max:
                         if salary_min and salary_max:
-                            salary_raw = f"${int(salary_min)} - ${int(salary_max)}"
+                            salary_raw = f"{int(salary_min)} - {int(salary_max)}"
                         elif salary_min:
-                            salary_raw = f"${int(salary_min)}"
+                            salary_raw = f"{int(salary_min)}"
                         elif salary_max:
-                            salary_raw = f"${int(salary_max)}"
+                            salary_raw = f"{int(salary_max)}"
 
                     location = item.get("location", {}).get("display_name") or ""
                     # Extract country from the Adzuna location object

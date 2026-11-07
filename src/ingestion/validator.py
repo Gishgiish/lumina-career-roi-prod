@@ -18,8 +18,13 @@ from datetime import UTC, datetime
 
 import polars as pl
 
-# Rough FY2025/2026 exchange rates (USD base) — in production this should be
-# pulled from a live FX API (e.g., exchangerate-api.com, open.er-api.com)
+# Rough FY2025/2026 exchange rates (USD base).
+#
+# Decision (Step 2.1, 2026-11-07): keep these static for the prototype. They
+# are deterministic, work offline, and need no API key, which keeps tests and
+# seed runs reproducible. They are still an approximation and must be moved to
+# configuration or a live FX source before any production launch; treat the
+# converted USD values as directional, not financially precise.
 FX_RATES_TO_USD = {
     "USD": 1.0,
     "EUR": 1.08,
@@ -30,6 +35,7 @@ FX_RATES_TO_USD = {
     "BRL": 0.20,
     "PLN": 0.25,
     "JPY": 0.0067,
+    "CNY": 0.14,
     "CHF": 1.13,
     "NZD": 0.61,
     "SEK": 0.095,
@@ -56,6 +62,10 @@ CURRENCY_SYMBOLS = {
     "₦": "NGN", "KSh": "KES", "CHF": "CHF", "kr": "SEK",
 }
 
+# ISO 4217 codes we can convert. Symbols are checked after these so that the
+# single-letter "R" (ZAR) can never match the "R" inside "EUR" or "INR".
+ISO_CURRENCY_CODES = frozenset(FX_RATES_TO_USD)
+
 # Keywords that indicate an hourly salary
 HOURLY_HINTS = ["hour", "hr", "/h", "per hour", "hourly"]
 # Keywords that indicate an annual salary
@@ -65,7 +75,7 @@ ANNUAL_HINTS = ["year", "/yr", "per year", "annum", "annual", "/a"]
 def _parse_salary_numbers(salary_str: str, min_threshold: float = 10_000) -> list[float]:
     """
     Extract numeric salary values from a messy string.
-    Handles: "100k", "$100,000", "1.2", "100 - 150", "€80k - €95k", "90k - 110k"
+    Handles: "100k", "$100,000", "120 000 kr", "1.2", "100 - 150", "€80k - €95k", "90k - 110k"
     Returns a list of numbers (as float, already un-k'd).
 
     :param min_threshold: Minimum value to consider a real salary. Annual
@@ -78,13 +88,16 @@ def _parse_salary_numbers(salary_str: str, min_threshold: float = 10_000) -> lis
     text = salary_str.replace(",", "").replace("–", "-").replace("—", "-")
 
     # Find all numeric tokens that could be salaries.
-    # This pattern catches: 100k, 100000, 95.5k, 120
-    matches = re.findall(r"(\d+(?:\.\d+)?)\s*(k|m|K|M)?", text, re.IGNORECASE)
+    # Catches: 100k, 100000, 95.5k, 120 — plus space-grouped thousands like
+    # "120 000" (common in SE/DK/NO/DE listings) as a single number.
+    # The trailing \b stops the k/m shorthand from stealing the leading letter
+    # of words like "kr" (so "120 000 kr" stays 120_000, not 120_000_000).
+    matches = re.findall(r"(\d+(?:\.\d+)?(?:\s\d{3})*)\s*(k|m|K|M)?\b", text, re.IGNORECASE)
 
     numbers = []
     for value, suffix in matches:
         try:
-            num = float(value)
+            num = float("".join(value.split()))
             if suffix and suffix.lower() == "k":
                 num *= 1000
             elif suffix and suffix.lower() == "m":
@@ -100,10 +113,71 @@ def _parse_salary_numbers(salary_str: str, min_threshold: float = 10_000) -> lis
 
 
 def _detect_currency(salary_str: str, fallback: str | None = None) -> str | None:
-    """Detect the currency from a salary string."""
-    for symbol, code in CURRENCY_SYMBOLS.items():
-        if symbol in salary_str:
+    """Detect the currency from a salary string using context-aware matching.
+
+    Heuristics:
+     - Check ISO 4217 codes first as whole tokens, so "EUR 80k" and
+       "1,200,000 INR" are read as EUR/INR rather than letting the single-letter
+       "R" (ZAR) rule match the R inside the code.
+     - Then iterate symbols longest-first (so 'C$' is checked before '$').
+     - Require symbols to appear in currency positions (adjacent to digits or
+       as a standalone token) to avoid accidental substring matches.
+     - Disambiguate '¥' -> CNY if the text mentions China/CNY, else JPY.
+     - For the single-letter "R" (ZAR), require a standalone/number-adjacent
+       token that is not preceded by a letter.
+    """
+
+    if not salary_str:
+        return fallback
+
+    text = salary_str
+
+    # 1. ISO codes are the least ambiguous signal: match them as whole tokens.
+    for code in sorted(ISO_CURRENCY_CODES, key=len, reverse=True):
+        pattern = rf"(?<![A-Za-z]){re.escape(code)}(?![A-Za-z])"
+        if re.search(pattern, text, re.IGNORECASE):
             return code
+
+    # 2. Symbols, longest-first so multi-character symbols win over their
+    #    single-character prefixes ("C$" before "$", "R$" before "R").
+    for symbol in sorted(CURRENCY_SYMBOLS.keys(), key=len, reverse=True):
+        code = CURRENCY_SYMBOLS[symbol]
+        esc = re.escape(symbol)
+
+        # "R" (ZAR) is the riskiest symbol: it must be a standalone token or
+        # adjacent to digits, and it must not be preceded by another letter.
+        # This keeps "R 500 000" and "500 000 R" working while rejecting the
+        # R in "EUR"/"INR".
+        if symbol == "R":
+            pattern = r"(?<![A-Za-z])R(?=\s*\d)|(?<=\d)\s*R(?![A-Za-z])"
+            if re.search(pattern, text, re.IGNORECASE):
+                return code
+            continue
+
+        # Build flexible patterns:
+        # - symbol directly before digits e.g. "C$ 120,000" or "$120k"
+        # - digits directly before symbol e.g. "120,000 kr"
+        # - standalone token e.g. "CHF"
+        prefix_digits = rf"{esc}\s*\d"  # symbol then digits
+        suffix_digits = rf"\d\s*{esc}"  # digits then symbol
+        standalone = rf"\b{esc}\b"      # whole token match
+
+        if symbol.isalpha():
+            # Alphabetic symbols must be a standalone token or touch a number;
+            # never match arbitrary substrings (e.g. "kr" inside "Krakow").
+            pattern = rf"({prefix_digits}|{suffix_digits}|{standalone})"
+        else:
+            pattern = rf"({prefix_digits}|{suffix_digits}|{esc})"
+
+        if re.search(pattern, text, re.IGNORECASE):
+            # special-case: '¥' could be JPY or CNY — prefer CNY if context mentions China/CNY
+            if symbol == "¥":
+                low = text.lower()
+                if "cny" in low or 'china' in low or "cn" in low:
+                    return "CNY"
+                return "JPY"
+            return code
+
     if fallback:
         return fallback
     return None
@@ -145,8 +219,13 @@ def _parse_salary(salary_raw: str | None, currency: str | None = None, salary_ty
     if not salary_raw:
         return None, None, currency or "USD", salary_type
 
-    # Detect currency from string or fallback
-    detected_currency = _detect_currency(salary_raw, currency) or "USD"
+    # Prefer the adapter-supplied ISO currency over symbol sniffing. Adzuna, for
+    # example, knows the country currency but historically emitted "$" in every
+    # salary string; trusting the symbol would mis-convert GBP/EUR/INR salaries.
+    explicit_currency = currency.upper() if currency else None
+    if explicit_currency and explicit_currency not in ISO_CURRENCY_CODES:
+        explicit_currency = None
+    detected_currency = explicit_currency or _detect_currency(salary_raw) or "USD"
     detected_type = _detect_salary_type(salary_raw) if salary_type == "unknown" else salary_type
 
     # Hourly rates can be as low as $5; annual salaries should be > $10k

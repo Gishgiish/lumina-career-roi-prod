@@ -1,8 +1,10 @@
 # test_r2.py
 import os
-from dotenv import load_dotenv
+
 import boto3
 from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -26,5 +28,5 @@ try:
     # List objects to prove it works
     response = client.list_objects_v2(Bucket=bucket)
     print(f"Objects in bucket: {[obj['Key'] for obj in response.get('Contents', [])]}")
-except Exception as e:
+except (ClientError, BotoCoreError, ConnectionError) as e:
     print(f"❌ FAILED: {e}")

@@ -23,6 +23,7 @@ from src.api.schemas import (
     MarketOverviewResponse,
     RelatedSkillsResponse,
     SalaryDistributionResponse,
+    SkillDemandListResponse,
     SkillOverlapListResponse,
     SkillsListResponse,
 )
@@ -126,6 +127,20 @@ def get_skill_overlap(request: Request, limit: int = Query(20, ge=1, le=100)):
     try:
         data = loader.get_skill_overlap_data(limit=limit)
         return {"total_combos": len(data), "data": data}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/skills/demand", response_model=SkillDemandListResponse, tags=["Skills"])
+@limiter.limit("100/minute")
+def get_skill_demand(request: Request, limit: int = Query(50, ge=1, le=200)):
+    """
+    Returns skill demand across all jobs, including salary-less postings.
+    Complements the salary-based ROI marts, which cover salaried jobs only.
+    """
+    try:
+        data = loader.get_skill_demand_data(limit=limit)
+        return {"total_skills": len(data), "data": data}
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=str(e))
 

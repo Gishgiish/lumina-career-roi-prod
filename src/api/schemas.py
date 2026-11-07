@@ -20,6 +20,14 @@ class SkillOverlapResponse(BaseModel):
     combo_premium: float = Field(..., description="Salary premium for this combo (USD)")
 
 
+class SkillDemandResponse(BaseModel):
+    """Demand for a skill across all jobs, including salary-less postings."""
+
+    skill: str = Field(..., description="The name of the technical skill")
+    job_demand_count: int = Field(..., description="Number of jobs mentioning this skill")
+    job_share: float = Field(..., description="Fraction of jobs-with-skills mentioning it")
+
+
 class RelatedSkillResponse(BaseModel):
     """A related skill with co-occurrence count."""
 
@@ -54,6 +62,13 @@ class SkillOverlapListResponse(BaseModel):
 
     total_combos: int
     data: list[SkillOverlapResponse]
+
+
+class SkillDemandListResponse(BaseModel):
+    """List of skills ranked by demand across all jobs."""
+
+    total_skills: int
+    data: list[SkillDemandResponse]
 
 
 class CompareResponse(BaseModel):

@@ -4,11 +4,13 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import polars as pl
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from main import app
+from src.utils import api_data_loader as loader
 
 client = TestClient(app)
 
@@ -63,6 +65,22 @@ class TestSkillsEndpoints:
         assert resp.status_code == 200
         assert resp.json()["total_combos"] == 1
 
+    @patch("src.utils.api_data_loader.get_skill_demand_data")
+    def test_get_skill_demand(self, mock):
+        mock.return_value = [
+            {"skill": "Python", "job_demand_count": 90, "job_share": 0.9},
+            {"skill": "SQL", "job_demand_count": 70, "job_share": 0.7},
+        ]
+        resp = client.get("/api/v1/skills/demand?limit=2")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_skills"] == 2
+        assert data["data"][0] == {
+            "skill": "Python",
+            "job_demand_count": 90,
+            "job_share": 0.9,
+        }
+
     @patch("src.utils.api_data_loader.compare_skills")
     def test_compare(self, mock):
         mock.return_value = [
@@ -76,3 +94,17 @@ class TestSkillsEndpoints:
     def test_compare_empty(self):
         resp = client.get("/api/v1/skills/compare?skills=")
         assert resp.status_code == 400
+
+
+class TestDemandLoader:
+    @patch("src.utils.api_data_loader._read_gold_mart")
+    def test_job_share_keeps_fractional_precision(self, mock_read):
+        mock_read.return_value = pl.DataFrame({
+            "skill": ["Python"],
+            "job_demand_count": [69],
+            "job_share": [0.08625],
+        })
+
+        data = loader.get_skill_demand_data()
+
+        assert data[0]["job_share"] == 0.08625

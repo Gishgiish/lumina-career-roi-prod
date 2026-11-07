@@ -212,7 +212,10 @@ class HackerNewsSource(BaseSource):
                     location=location or "Remote",
                     country=country,
                     salary_raw=salary_raw,
-                    salary_currency="USD",
+                    # Salary is parsed from free text and may be USD, EUR, or
+                    # GBP; leave the currency unset so the validator detects
+                    # the symbol instead of forcing USD.
+                    salary_currency=None,
                     salary_type=SalaryType.ANNUAL if salary_raw else SalaryType.UNKNOWN,
                     posted_at=self._safe_datetime(comment.get("time")),
                     url=f"https://news.ycombinator.com/item?id={comment_id}",
