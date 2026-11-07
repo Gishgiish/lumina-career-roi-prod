@@ -205,3 +205,67 @@ class TestCurrencyDetection:
         # never an arbitrary 'R' inside prose.
         assert _detect_currency("Senior Python Developer") is None
         assert _detect_currency("R 40,000") == "ZAR"
+
+
+class TestSalaryPeriodAndPlausibility:
+    def test_href_is_not_treated_as_hourly(self):
+        # "hr" inside href/https must not trigger annualization (Step 4 bug).
+        min_v, max_v, _, stype = _parse_salary(
+            "$190k base. Apply at https://example.com/href", "USD"
+        )
+        assert stype == "unknown"
+        assert min_v == 190_000
+        assert max_v == 190_000
+
+    def test_hourly_hint_still_detected(self):
+        min_v, _, _, stype = _parse_salary("$50 - $70 per hour", "USD")
+        assert stype == "hourly"
+        assert min_v == pytest.approx(104_000, rel=1e-3)
+
+    def test_implausible_salary_is_rejected(self):
+        min_v, max_v, _, _ = _parse_salary("$2,000,000,000", "USD", "annual")
+        assert min_v is None
+        assert max_v is None
+
+    def test_implausible_range_value_does_not_poison_range(self):
+        min_v, max_v, _, _ = _parse_salary(
+            "$100,000 - $9,999,999,999", "USD", "annual"
+        )
+        assert min_v == 100_000
+        assert max_v == 100_000
+
+    def test_adapter_declared_hourly_type_is_honored(self):
+        df = pl.DataFrame({
+            "title": ["Engineer"],
+            "salary_raw": ["$50 - $70"],
+            "salary_currency": ["USD"],
+            "salary_type": ["hourly"],
+        })
+        valid_df, _ = enforce_constraints(df, source="test")
+        assert valid_df["salary_type"][0] == "hourly"
+        assert valid_df["min_salary_usd"][0] == pytest.approx(104_000, rel=1e-3)
+
+    def test_adapter_declared_annual_type_skips_text_detection(self):
+        df = pl.DataFrame({
+            "title": ["Engineer"],
+            "salary_raw": ["$190k + 40 hours/week"],
+            "salary_currency": ["USD"],
+            "salary_type": ["annual"],
+        })
+        valid_df, _ = enforce_constraints(df, source="test")
+        assert valid_df["salary_type"][0] == "annual"
+        assert valid_df["min_salary_usd"][0] == 190_000
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("$250-325K", (250_000, 325_000)),
+            ("$200-300K", (200_000, 300_000)),
+            ("$150-$250k", (150_000, 250_000)),
+            ("$200–250k", (200_000, 250_000)),
+            ("$300k-$400k", (300_000, 400_000)),
+        ],
+    )
+    def test_range_suffix_applies_to_both_bounds(self, raw, expected):
+        min_v, max_v, _, _ = _parse_salary(raw, "USD", "annual")
+        assert (min_v, max_v) == expected

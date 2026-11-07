@@ -13,10 +13,13 @@ The output schema is the canonical Bronze-layer record:
     min_salary, max_salary, salary_currency, salary_type,
     posted_at, url, company, tags, skills_raw
 """
+import logging
 import re
 from datetime import UTC, datetime
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 # Rough FY2025/2026 exchange rates (USD base).
 #
@@ -66,10 +69,50 @@ CURRENCY_SYMBOLS = {
 # single-letter "R" (ZAR) can never match the "R" inside "EUR" or "INR".
 ISO_CURRENCY_CODES = frozenset(FX_RATES_TO_USD)
 
-# Keywords that indicate an hourly salary
-HOURLY_HINTS = ["hour", "hr", "/h", "per hour", "hourly"]
-# Keywords that indicate an annual salary
-ANNUAL_HINTS = ["year", "/yr", "per year", "annum", "annual", "/a"]
+# Salary plausibility bounds in USD. Anything outside these is treated as a
+# parsing artifact (URL ids, page numbers, HTML-entity fragments) rather than a
+# salary. This is deliberately broad: it rejects quadrillion-scale noise while
+# keeping senior/executive compensation.
+MIN_ANNUAL_USD = 1_000
+MAX_ANNUAL_USD = 10_000_000
+
+# Word-boundary patterns for salary period hints. Substring matching is unsafe:
+# "hr" appears inside "href"/"https", which misclassified HTML comments as
+# hourly and multiplied their numbers by 2,080.
+HOURLY_HINTS = [re.compile(pattern, re.IGNORECASE) for pattern in (
+    r"\bper\s+hour\b",
+    r"\ban\s+hour\b",
+    r"\bhourly\b",
+    r"\bhours?\b",
+    r"\bhrs?\b",
+    r"/\s*h(?:r)?\b",
+)]
+ANNUAL_HINTS = [re.compile(pattern, re.IGNORECASE) for pattern in (
+    r"\bper\s+year\b",
+    r"\bannual(?:ly)?\b",
+    r"\bannum\b",
+    r"\byearly\b",
+    r"/\s*(?:yr|year)\b",
+)]
+
+
+# "$250-325K", "$150-$250k", and "$200 to 300k" mean both bounds share the
+# trailing suffix. Currency symbols are preserved when either bound has one.
+_RANGE_SUFFIX_RE = re.compile(
+    r"([€£$]?)\s*(\d+(?:\.\d+)?)\s*(?:-|to)\s*"
+    r"([€£$]?)\s*(\d+(?:\.\d+)?)\s*(k|m)\b",
+    re.IGNORECASE,
+)
+
+
+def _propagate_range_suffix(text: str) -> str:
+    """Apply a trailing k/m suffix to both bounds of a salary range."""
+
+    def _replacement(match: re.Match) -> str:
+        low_symbol, low, high_symbol, high, suffix = match.groups()
+        return f"{low_symbol}{low}{suffix} - {high_symbol}{high}{suffix}"
+
+    return _RANGE_SUFFIX_RE.sub(_replacement, text)
 
 
 def _parse_salary_numbers(salary_str: str, min_threshold: float = 10_000) -> list[float]:
@@ -86,6 +129,8 @@ def _parse_salary_numbers(salary_str: str, min_threshold: float = 10_000) -> lis
 
     # Normalize common separators
     text = salary_str.replace(",", "").replace("–", "-").replace("—", "-")
+    # "$250-325K" only labels the upper bound with "K"; make both bounds share it.
+    text = _propagate_range_suffix(text)
 
     # Find all numeric tokens that could be salaries.
     # Catches: 100k, 100000, 95.5k, 120 — plus space-grouped thousands like
@@ -184,11 +229,14 @@ def _detect_currency(salary_str: str, fallback: str | None = None) -> str | None
 
 
 def _detect_salary_type(salary_str: str) -> str:
-    """Detect whether the salary is hourly, monthly, or annual."""
-    lower = salary_str.lower()
-    if any(hint in lower for hint in HOURLY_HINTS):
+    """Detect whether the salary is hourly, monthly, or annual.
+
+    Uses word-boundary patterns rather than substring checks so HTML fragments
+    such as ``href``/``https`` cannot be read as ``hr`` (hourly).
+    """
+    if any(pattern.search(salary_str) for pattern in HOURLY_HINTS):
         return "hourly"
-    if any(hint in lower for hint in ANNUAL_HINTS):
+    if any(pattern.search(salary_str) for pattern in ANNUAL_HINTS):
         return "annual"
     return "unknown"
 
@@ -234,20 +282,22 @@ def _parse_salary(salary_raw: str | None, currency: str | None = None, salary_ty
     if not numbers:
         return None, None, detected_currency, detected_type
 
-    # Determine min/max
-    if len(numbers) >= 2:
-        min_val = min(numbers[0], numbers[1])
-        max_val = max(numbers[0], numbers[1])
-    else:
-        min_val = max_val = numbers[0]
+    # Annualize and convert each candidate, then drop implausible values. This
+    # keeps a stray URL id or page number from setting the min/max and prevents
+    # the quadrillion-scale averages seen in the first live run.
+    usd_values: list[float] = []
+    for number in numbers[:8]:
+        annual = _annualize(number, detected_type)
+        usd = _normalize_to_usd(annual, detected_currency)
+        if MIN_ANNUAL_USD <= usd <= MAX_ANNUAL_USD:
+            usd_values.append(usd)
 
-    # Annualize and convert to USD
-    min_annual = _annualize(min_val, detected_type)
-    max_annual = _annualize(max_val, detected_type)
-    min_usd = _normalize_to_usd(min_annual, detected_currency)
-    max_usd = _normalize_to_usd(max_annual, detected_currency)
+    if not usd_values:
+        return None, None, detected_currency, detected_type
 
-    return min_usd, max_usd, detected_currency, detected_type
+    # Preserve the original "first two numbers form the range" semantics.
+    selected = usd_values[:2]
+    return min(selected), max(selected), detected_currency, detected_type
 
 
 def enforce_constraints(
@@ -281,9 +331,18 @@ def enforce_constraints(
         if "salary_currency" in df.columns
         else [default_currency] * df.height
     )
+    # Adapters that know the salary period (for example an hourly API field)
+    # must not have that knowledge discarded. Unknown/absent values fall back
+    # to text detection inside _parse_salary.
+    type_col = (
+        df.get_column("salary_type").to_list()
+        if "salary_type" in df.columns
+        else ["unknown"] * df.height
+    )
 
-    for raw, cur in zip(salary_raw_col, currency_col):
-        min_v, max_v, currency, s_type = _parse_salary(raw, cur)
+    for raw, cur, stype in zip(salary_raw_col, currency_col, type_col):
+        declared_type = getattr(stype, "value", stype) or "unknown"
+        min_v, max_v, currency, s_type = _parse_salary(raw, cur, declared_type)
         min_salaries.append(min_v)
         max_salaries.append(max_v)
         currencies.append(currency)
@@ -295,6 +354,17 @@ def enforce_constraints(
         pl.Series("salary_currency", currencies, dtype=pl.Utf8),
         pl.Series("salary_type", salary_types, dtype=pl.Utf8),
     ])
+
+    raw_present = sum(1 for raw in salary_raw_col if raw)
+    parsed = sum(1 for lo, hi in zip(min_salaries, max_salaries) if lo is not None or hi is not None)
+    if source and raw_present:
+        logger.info(
+            "%s: parsed %d/%d salary strings (%d unparsed or implausible)",
+            source,
+            parsed,
+            raw_present,
+            raw_present - parsed,
+        )
 
     # Define the strict Data Contract
     # A row is VALID only if it has a title AND (parseable salary OR a known

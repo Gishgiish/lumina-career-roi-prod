@@ -1,8 +1,8 @@
 # Lumina Career ROI — Codebase Status and Audit
 
-**Prepared:** 2026-11-04  
-**Last updated:** 2026-11-07 — Steps 1–3 (green baseline, currency/deduplication, Gold hygiene and salary-less policy) completed; see §10.  
-**Baseline:** commit `e1848d3` (`Fix #2 for Lint errors`) plus the uncommitted working-tree changes described below  
+**Prepared:** 2026-11-04\
+**Last updated:** 2026-11-07 — Steps 1–3 committed; Step 4 live scratch run executed three times, its P0 salary defects fixed and re-verified; see §10.\
+**Baseline:** commit `42c3218` (`Add data-correctness remediation (Steps 1-3) and review fixes`) plus the Step 4 salary fixes in the current HEAD commit; working tree clean
 **Method:** full read of backend, pipeline, frontend, infra, tests, and CI; inspection of the generated data; execution of
 the test, lint, and build suites; direct reproduction of the defects listed here.
 
@@ -22,14 +22,18 @@ deduplication (Step 2.2), and the Gold hygiene/salary-less work (Step 3) are com
 contaminate the marts, related pairs are canonicalized, salary buckets are ordered numerically, title casing preserves
 acronyms, and salary-less jobs are retained for demand statistics while salary-based marts exclude them and report
 coverage. Remaining gaps are operational and accuracy-related: no scheduler or data-freshness signal, static FX rates,
-heuristic skill extraction, and no verified real ingestion run.
+heuristic skill extraction, and one unscheduled scratch live run (not committed as data).
 
 **Bottom line:** do not treat the current output as production labor-market intelligence. The synthetic demo is now
 internally consistent; real ingestion, freshness, and serving hardening remain.
 
-**Step status (2026-11-07): Steps 1, 2, and 3 are complete.** Backend lint and tests are green, scratch data/state
-isolation exists, the seed and pipeline share one Gold builder, currency and dedup regressions are fixed, and Gold
-hygiene plus the salary-less policy are implemented and covered by tests. Step 4 (one real ingestion run) is next.
+**Step status (2026-11-07): Steps 1, 2, 3, and 4 are complete.** Backend lint and tests are green (155 tests),
+scratch data/state isolation exists, the seed and pipeline share one Gold builder, currency and dedup regressions are
+fixed, and Gold hygiene plus the salary-less policy are implemented and covered by tests. Step 4 ran three times into
+scratch: run 1 exposed corrupt live salaries; after the HN parsing, salary-period, and plausibility fixes run 2 looked
+plausible, but review found that description-wide bare-amount matching still treated funding, savings, and revenue
+figures as salaries. Bare amounts are now trusted only in a pipe header or on payroll-vocabulary lines, and run 3
+re-verified the result. Remaining gaps are skill extraction, source health, coverage, and freshness.
 
 ---
 
@@ -37,16 +41,16 @@ hygiene plus the salary-less policy are implemented and covered by tests. Step 4
 
 | Area | Verified fact |
 |---|---|
-| Git | `main`, 4 commits, no branches. At the 2026-11-04 review baseline the working tree had 3 modified code files and 1 untracked audit file |
-| Uncommitted changes | 2026-11-07 (after Step 3): `.env.sample`, `README.md`, `main.py`, `scripts/seed_data.py`, `src/api/schemas.py`, `src/ingestion/validator.py`, `src/ingestion/sources/adzuna.py`, `src/transformation/dedup.py`, `src/transformation/gold.py`, `src/transformation/silver.py`, `src/utils/api_data_loader.py`, `src/utils/paths.py`, `tests/test_api.py`, `tests/test_dedup.py`, `tests/test_r2.py`, `tests/test_validator.py`, plus new `tests/test_adzuna.py`, `tests/test_gold.py`, `tests/test_paths.py`, `tests/test_seed.py`, `tests/test_silver.py`, and `CODEBASE_STATUS.md` |
-| Documentation cleanup | On 2026-11-04 this status file was added, `README.md` was rewritten to match the code, and `AUDIT_PLAN.md`, `lumina_audit_report.md`, and `frontend/README.md` were deleted |
-| Backend tests | `135 passed` (was `109` after Step 2.2, `102` after Step 2.1, `85` after Step 1, and `59` before Step 1) |
+| Git | `main`, 6 commits, no branches. HEAD is the Step 4 salary-fix commit; the previous baseline was `42c3218`, and the 2026-11-04 review baseline was `e1848d3` plus uncommitted work |
+| Uncommitted changes | None after the Step 4 salary-fix commit (2026-11-07) |
+| Documentation cleanup | On 2026-11-04 this status file was added, `README.md` was rewritten to match the code, and `AUDIT_PLAN.md`, `lumina_audit_report.md`, and `frontend/README.md` were deleted. `42c3218` also records those two audit-file deletions |
+| Backend tests | `155 passed` (was `144` after the first Step 4 review, `135` after Step 3, `109` after Step 2.2, `102` after 2.1, `85` after Step 1, `59` before Step 1) |
 | Backend lint | **Passes.** `uv run ruff check src/ scripts/ tests/` is clean. `I001` fixed 2026-11-07; `BLE001` was already fixed in the working tree |
 | Frontend lint | `npm run lint` passes |
 | Frontend build | `npm run build` passes; Next.js performs TypeScript checking during the build |
-| API | All 11 public endpoints respond; p50 ~7 ms and p95 ~14 ms in-process against seed data |
+| API | All 11 public endpoints respond against seed data and against the scratch live run (1.8–17.5 ms per request in-process) |
 | Data | 800 synthetic rows, 6 sources, 82 skills represented, 700 salaried jobs (87.5% coverage), 7 Gold marts, files regenerated 2026-11-07 |
-| Live pipeline evidence | **None.** Only a legacy three-row Bronze file and quarantine file from 2026-07-31 exist, using an obsolete schema |
+| Live pipeline evidence | **Scratch run only** (2026-11-07, keyless 6, run 3): 5 sources produced data, 3,517 Bronze → 3,269 Silver, 96 salaried (2.9%), 7 Gold marts. Kept under `/tmp/opencode/lumina-step4`; default demo data and watermark untouched. Lever yielded zero jobs (all boards 404) |
 | PostgreSQL | Provisioned in compose; zero application code uses it |
 | Scheduling | No cron, CI schedule, or Prefect deployment in the repository |
 | Frontend tests | None |
@@ -193,10 +197,19 @@ _parse_salary("INR 1,200,000")       # -> (14400.0, 14400.0, "INR", "unknown")
 _parse_salary("$70000 - $90000", "GBP")  # -> (88900.0, 114300.0, "GBP", "unknown")
 ```
 
-Remaining limitation: FX rates are still the hardcoded FY2025/26 `FX_RATES_TO_USD` table. **Decision:** keep them for
-the prototype because they are deterministic, offline, and need no API key; move them to configuration or a live FX
-source before any production launch. Converted USD values are directional, not financially precise. The decision is
-documented in `src/ingestion/validator.py`.
+Remaining limitations:
+
+- FX rates are still the hardcoded FY2025/26 `FX_RATES_TO_USD` table. **Decision:** keep them for the prototype
+  because they are deterministic, offline, and need no API key; move them to configuration or a live FX source before
+  any production launch. Converted USD values are directional, not financially precise. The decision is documented in
+  `src/ingestion/validator.py`.
+- `_parse_salary_numbers` handles comma-grouped (`80,000`) and space-grouped (`80 000`) thousands but not dot-grouped
+  thousands (`80.000 EUR`). It reads `80.000` as the decimal number `80`, which falls below the annual threshold, so
+  the salary is dropped entirely; for hourly rates the same misread produces `$80/hour`. Add dot-grouped parsing
+  before relying on DE/NL/ID-style postings. Documented in `src/ingestion/validator.py`.
+- `_detect_currency` disambiguates `¥` with a loose `"cn" in low` substring test as well as `cny`/`china`. Any `¥`
+  string containing the letters `cn` anywhere (for example a company or city name) is classified as CNY instead of
+  JPY. Tighten to whole-token/context matching when CNY volume matters. Documented in `src/ingestion/validator.py`.
 
 Status: **fixed for the currency-detection and conversion path; FX-rate precision remains an open prototype
 limitation.**
@@ -279,6 +292,45 @@ Resolution: `_clean_skills` strips empty entries and drops jobs with no usable s
 `build_skill_related`. `skills_list` is cast to `List(Utf8)` so all-null columns are handled. Coverage:
 `tests/test_gold.py::TestSkillHygiene`.
 
+#### D-10 — Live HackerNews salaries were arbitrary description text
+
+**Found and fixed in Step 4 (2026-11-07).** Recorded here because the seed demo cannot exercise this path.
+
+Evidence from the first scratch run (keyless 6, 3,511 Bronze rows):
+
+- Algolia returns HN comment bodies as HTML with `<p>` tags, not newlines. `_parse_job_comment` split `lines[0]`,
+  which was the entire comment, then used `parts[3]` as `salary_raw`.
+- 168 HN rows had `salary_raw` averaging 278 characters (max 2,066): `"Full-time"`, `"UK time zone"`,
+  `"Remote (North America & Europe)"`, and whole HTML paragraphs.
+- `HOURLY_HINTS` contained `"hr"` and used substring matching, so `href`/`https` made 35 HN rows hourly; the
+  validator then multiplied arbitrary numbers by 2,080.
+- Result: 14 titles longer than 120 characters (max 1,268) containing HTML, `average_salary_usd = 1.83e16`, one row
+  at `2.93e18`, 49-skill overlap combos, and `"Hiring"` as the #2 skill.
+
+Resolution:
+
+- HN comment bodies are converted from HTML to line-delimited plain text, and salary is reduced to an explicit
+  salary token (max 80 chars). Titles are capped at 200 chars.
+- `_detect_salary_type` uses word-boundary regex patterns, so `hr` no longer matches `href`/`https`.
+- `_parse_salary` annualizes and converts each candidate, keeps only values within `$1,000`–`$10,000,000`, and takes
+  the range from the first two plausible values.
+- `enforce_constraints` now honors an adapter-declared `salary_type` and logs per-source parse coverage.
+- HN leaves the salary period unknown for free text so detection can run.
+
+Verified in the third scratch run: average `$153,903.27`, median `$157,500`, 96/3,269 salaried (2.9%), zero HN
+hourly misclassifications, `salary_raw` mean 10.4 chars (max 19), zero titles containing HTML, 11/11 API endpoints
+200, default data and R2 untouched. Coverage: `tests/test_hackernews.py`,
+`tests/test_validator.py::TestSalaryPeriodAndPlausibility`.
+
+Review finding fixed before run 3: run 2 matched bare currency amounts anywhere in the comment body, so `$2.7M`
+(raised), `$1.2M` (saved), and `$10k` (revenue) entered `salary_raw` and inflated the average by 22%. Bare amounts are
+now accepted only in a pipe-delimited header or on a line with payroll vocabulary; explicit ranges and period-bound
+amounts remain trusted anywhere.
+
+Remaining after the fix: HN hourly/monthly rates whose period suffix is stripped (`$55 - $75`, `$70-150`, `€5,000`)
+are extracted but stay unparsed; comma-decimal values such as `"$35,3k"` are read as `353k`; skill extraction still
+yields `"Hiring"`/standalone `"Go"` false positives; and full-set combos still reach 49 skills. These are P1.
+
 ### P1 — User-visible defects, freshness, and business accuracy
 
 #### D-05 — Salary histogram buckets are in the wrong order
@@ -344,7 +396,10 @@ Status: **fixed (Step 3).**
 
 Resolution: `_standardize_title` applies title case and then restores known acronyms/product names from
 `TITLE_ACRONYMS` (`AWS`, `ML`, `API`, `SQL`, `ETL`, `QA`, `DevOps`, `iOS`, `JavaScript`, and others). The map is
-explicit and extensible; it is not a general NLU title normalizer. Coverage: `tests/test_silver.py`.
+explicit and extensible; it is not a general NLU title normalizer. **Residual warning:** any acronym, product name, or
+proper noun not listed in `TITLE_ACRONYMS` is still title-cased (`GCP` → `Gcp`, `Kubernetes` → `Kubernetes` but
+`K8s` → `K8s` only if listed). Extend the map as new titles are observed; do not treat it as complete. Coverage:
+`tests/test_silver.py`.
 
 #### D-08 — Skill extraction has false positives and misses
 
@@ -363,6 +418,9 @@ Reproduced:
 extract_skills("We go to market with our product")  # -> ["Go"]
 extract_skills("Senior C developer")                # -> ["C"]
 ```
+
+Step 4 confirmed this at live scale: "Hiring" is the #2 demand skill (43.3% of jobs with skills) and standalone "Go"
+is #5 (27.1%). Full-description extraction also produces combos of up to 49 skills.
 
 Status: **open.**
 
@@ -407,14 +465,17 @@ Status: **open.**
 
 #### T-01 — Test and CI coverage does not protect the risky code
 
-Updated after Step 3 (2026-11-07):
+Updated after Step 4 (2026-11-07):
 
-- 135 backend tests pass.
+- 155 backend tests pass (20 new Step 4 regressions: HN HTML parsing, bounded salary tokens, `href` not hourly,
+  adapter-declared salary type, implausible-salary rejection, funding/savings/revenue amounts not becoming salary,
+  body salary behind a pay cue, body salary ranges, range-suffix propagation).
 - Gold builders (`tests/test_gold.py`), Silver normalization (`tests/test_silver.py`), path/state resolution
   (`tests/test_paths.py`), the seed script (`tests/test_seed.py`, subprocess smoke), currency detection/parsing plus
   the Adzuna and HackerNews currency contracts (`tests/test_validator.py`, `tests/test_adzuna.py`,
   `tests/test_hackernews.py`), and deduplication (`tests/test_dedup.py`) now have coverage.
-- Still untested: `orchestrator.py` and seven of the eight source adapters.
+- Still untested: `orchestrator.py` and six of the eight source adapters (`remoteok`, `remotive`, `arbeitnow`,
+  `greenhouse`, `lever`, `usajobs`). Adzuna and HackerNews now have targeted tests.
 - API tests still mock the data loader (plus one loader-level precision test).
 - No frontend test tooling or test files.
 - CI still has no coverage gate, no backend type check, no Docker smoke test, and no scheduled freshness check.
@@ -443,11 +504,15 @@ Status: **open; product decision required.**
 | O-02 | Docker/ops debt: root `.dockerignore` does not exclude `.git` or `frontend/node_modules`; there is no `frontend/.dockerignore`; ETL/backend containers run as root; no healthchecks; hardcoded Postgres password; CORS hardcoded to localhost; `NEXT_PUBLIC_API_URL` is build-time, not runtime | `Dockerfile`, `Dockerfile.backend`, `.dockerignore`, `docker-compose.yml:45-59`, `main.py:56-65` |
 | O-03 | Legacy/dead code: `scripts/run_bronze_ingestion.py` pipes a fake schema (`job_title`, `job_id`) into `enforce_constraints`, which expects `title` and raises `ColumnNotFoundError`; `src/ingestion/source.py` is a leftover fake-data stub | reproduced |
 | O-04 | `configs/ingestion_state.json` is committed runtime state in the legacy `last_watermark` shape; the orchestrator expects `watermarks` and ignores it | `configs/ingestion_state.json`, `scripts/orchestrator.py:30-56` |
-| O-05 | `tests/test_r2.py` performs a live R2 network call at import time and has no assertions; it can become a CI network dependency | `tests/test_r2.py:10-30` |
+| O-05 | `tests/test_r2.py` performs a live R2 network call **during pytest collection** and has no assertions; it fails or stalls offline, needs credentials to collect, and makes CI depend on R2 | `tests/test_r2.py:10-30` |
 | O-06 | No serving cache; every request re-reads parquet. At seed scale this is fine (p95 ~14 ms). The overlap mart can grow much larger at scale, so caching remains useful later, but it is not the immediate problem the earlier report implied | `src/utils/api_data_loader.py:17-22` |
 | O-07 | `BaseSource._retry_fetch` exists but is never used; adapters mostly rely on orchestrator-level retries | `src/ingestion/sources/base.py:111-124` |
 | P-02 | Version drift: `pyproject.toml` is `0.2.0`, API is `"2.0.0"`, and there is no single source of truth | `pyproject.toml:3`, `main.py:49`, `:80` |
 | P-03 | Default create-next-app SVGs and boilerplate remain in `frontend/public/` | repository contents |
+| G-01 | `build_skill_overlap` keys combinations with `", ".join(sorted skills)`. A skill name containing `", "` would collide two different skill sets into one combo; also ambiguous to split back into skills. No current taxonomy entry contains `", "`, so this is latent | `src/transformation/gold.py:166` |
+| G-02 | Demand and related counts use `pl.col("external_id").count()` / `n_unique()`, which ignore null IDs. Jobs with a null `external_id` are silently excluded from `job_demand_count` and `combo_demand_count`. All current adapters set an ID, but custom or legacy rows may not | `src/transformation/gold.py:135`, `:171`, `:301` |
+| S-01 | Every one of Lever's 20 curated boards returned HTTP 404 in Step 4; the adapter catches each error and continues, so a fully dead source is reported as "no new jobs" with no watermark and no warning | `src/ingestion/sources/lever.py`; `ingest_run1.log`–`ingest_run3.log` |
+| S-02 | Six Greenhouse boards returned 404 (spotify, mercadolibre, doordash, etsy, shopify, confluent); the rest still produced 2,882 rows | `src/ingestion/sources/greenhouse.py`; Step 4 logs |
 
 ---
 
@@ -469,7 +534,8 @@ Status: **open; product decision required.**
 
 The “combo” mart groups by the **full skill set**, not by pairs, and now carries `combo_size`. Two-, three-, and
 four-skill combinations still share one ranking, so compare premiums within a `combo_size` before comparing across
-sizes.
+sizes. The combo identity is a `", "`-joined string (see P2/G-01), and demand counts ignore rows with a null
+`external_id` (P2/G-02).
 
 ---
 
@@ -543,7 +609,9 @@ These are product decisions, not code decisions:
 
 ### Recommended: finish the data-correctness pass before adding features
 
-Remaining after Step 3: **~0.5 focused engineering days** (Steps 1, 2, and 3 are done; Step 4 is the next verification).
+Steps 1–4 are done. Remaining is P1 hardening, not another correctness gate: skill-extraction precision (D-08),
+source health (Lever/Greenhouse boards), salary coverage from salary-less sources, comma-decimal parsing, and a
+data-as-of manifest/scheduler (O-01). Estimate: **~1–2 focused engineering days**.
 
 #### Step 1 — Green baseline and safe test environment — **COMPLETE (2026-11-07)**
 
@@ -706,19 +774,42 @@ Post-review corrections (2026-11-07, same working tree):
 - `GET /api/v1/skills/demand` breaks demand ties by skill name for deterministic output.
 - README test counts and the project-status banner were refreshed.
 
-#### Step 4 — Run one real ingestion (~0.5 day)
+#### Step 4 — Run one real ingestion — **COMPLETE (2026-11-07)**
 
-Run into the scratch data directory and record:
+Delivered:
 
-- rows fetched / valid / quarantined per source,
-- salary parse coverage,
-- currency distribution,
-- null-skill count before and after the fix,
-- dedup rate and collapsed-row examples,
-- top skill and overlap outputs,
-- mart row counts and data age.
+- Scratch-only keyless-6 run with `LUMINA_DATA_DIR` + `LUMINA_STATE_FILE`; Adzuna/USAJobs credentials blanked in the
+  runner, R2 sync never invoked.
+- Run 1 exposed D-10: HTML comment text became salary, 35 HN rows were misclassified hourly, and average salary was
+  `1.83e16`.
+- P0 fixes applied: HN HTML normalization and bounded salary tokens, word-boundary period hints, per-candidate USD
+  plausibility bounds, and adapter-declared `salary_type` handling. See D-10.
+- Review of run 2 found that bare currency amounts anywhere in a comment body were treated as salary (`$2.7M` raised,
+  `$1.2M` saved, `$10k` revenue), inflating the average by 22%. Bare amounts are now trusted only in a pipe header or
+  on payroll-vocabulary lines; trailing `k`/`m` range suffixes are propagated to both bounds.
+- Run 2: 5 sources, 3,517 Bronze → 3,269 Silver (7.1% collapse), 101 salaried (3.1%), 250 skills, 7 marts;
+  average `$189,344.69`, median `$151,200` (superseded by run 3).
+- Run 3: same row counts, 96 salaried (2.9%), 250 skills, 7 marts; average `$153,903.27`, median `$157,500`; HN 224
+  rows, 67 salary tokens, 62 parsed, 0 hourly; 11/11 API endpoints 200.
+- Isolation verified: default `data/` and `configs/ingestion_state.json` checksums unchanged; no R2 upload.
 
-Only after these numbers are plausible should work move to caching, scheduling, API hardening, or B2B features.
+Evidence:
+
+```bash
+PYTHONPATH=. uv run pytest tests/ -q          # 155 passed
+uv run ruff check src/ scripts/ tests/       # All checks passed
+# run 3 (scratch):
+LUMINA_DATA_DIR=/tmp/opencode/lumina-step4/data \
+LUMINA_STATE_FILE=/tmp/opencode/lumina-step4/state/ingestion_state.json \
+PYTHONPATH=. uv run python /tmp/opencode/lumina-step4/run_stages.py
+```
+
+Full report: `/tmp/opencode/lumina-step4/results.md`. Granular tracker:
+`/tmp/opencode/lumina-step4-plan.md` (both temporary, not committed).
+
+Remaining for a trustworthy path: skill extraction false positives (D-08), dead/zero-yield sources (Lever), low salary
+coverage from salary-less sources, comma-decimal salary parsing (`$35,3k`), and no data-as-of manifest. Do not run
+`make ingest` for reruns: `scripts/orchestrator.py` ends with `task_sync_to_cloud()` and uploads to R2.
 
 ### Exit criteria for “trustworthy data path”
 
@@ -729,7 +820,8 @@ Only after these numbers are plausible should work move to caching, scheduling, 
 - [x] Salary buckets are in numeric order.
 - [x] Related-skill responses contain no duplicates.
 - [x] Title casing preserves acronyms.
-- [ ] One real ingestion produces inspectable, plausible statistics.
+- [x] One real ingestion produces inspectable, plausible statistics (scratch run 3; salary coverage and skill noise
+  remain documented P1 gaps).
 - [ ] Gold has a data-as-of timestamp or manifest.
 - [x] The seed and production mart builders are the same code or are verified against each other.
 
@@ -798,6 +890,42 @@ PYTHONPATH=. uv run pytest \
 PYTHONPATH=. uv run python scripts/seed_data.py            # 800 jobs, 700 salaried, 7 marts
 ```
 
+Committed baseline (2026-11-07):
+
+```bash
+git rev-list --count HEAD      # 6
+git log --oneline -1           # Step 4 live-ingestion salary fixes
+git status --short             # clean
+```
+
+After Step 4 (2026-11-07, scratch):
+
+```bash
+PYTHONPATH=. uv run pytest tests/ -q          # 155 passed
+uv run ruff check src/ scripts/ tests/       # All checks passed
+
+# keyless-6 scratch run, no R2:
+LUMINA_DATA_DIR=/tmp/opencode/lumina-step4/data \
+LUMINA_STATE_FILE=/tmp/opencode/lumina-step4/state/ingestion_state.json \
+PYTHONPATH=. uv run python /tmp/opencode/lumina-step4/run_stages.py
+
+# isolation:
+diff preflight-checksums.txt postflight_run3-checksums.txt   # identical
+grep -E "Cloud Sync|Uploading|R2" ingest_run3.log              # no matches
+```
+
+Run 3 Gold check:
+
+```text
+market: total_jobs=3269, jobs_with_salary=96, salary_coverage_rate=0.0294,
+        total_unique_skills=250, average_salary_usd=153903.27,
+        median_salary_usd=157500.00, top_source_count=5
+marts:  single_skill_roi=156, skill_demand=250, skill_overlap=74,
+        skill_related=8189, salary_distribution=387, top_skills=10
+HN:     224 rows, 67 explicit salary tokens, 62 parsed, 0 hourly misclassified
+API:    11/11 endpoints returned 200
+```
+
 Mart check after regeneration:
 
 ```text
@@ -842,13 +970,21 @@ API observations:
 
 ## 12. Limitations of This Review
 
-- Live ingestion has **not** been run during the audit or Steps 1–3. Step 1 added
-  `LUMINA_DATA_DIR` / `LUMINA_STATE_FILE`, so a scratch ingestion can now be attempted without overwriting the demo
-  or advancing the real watermark (Step 4).
+- Live ingestion has been run once into scratch (2026-11-07, keyless 6, twice after fixes). It has **not** been run
+  against Adzuna/USAJobs or the default demo data, and the scratch run is not scheduled. The live numbers in this
+  document come from `/tmp/opencode/lumina-step4/results.md`, not from committed artifacts.
 - Related-skill uniqueness was re-measured in Step 1: the pre-Step 1 demo returned 6 unique skills from 10 entries,
   and the regenerated demo returns 7; the earlier “5 unique” figure was incorrect.
-- Adapter behavior was verified by reading the code and by targeted unit calls, not by making live API requests.
+- Adapter behavior was verified by reading the code and by targeted unit calls for most adapters; HackerNews was also
+  exercised against live comments in Step 4. The other network adapters were not independently validated beyond
+  successful fetches.
 - API latency was measured in-process with `TestClient`, not over HTTP or through the production container.
 - Docker images were not built; Docker findings are based on Dockerfile/compose inspection and local context size.
 - The R2 test was executed locally and succeeded, confirming the bucket is reachable; no production data was uploaded.
 - The repository has no coverage report; “untested” means no test file references the module.
+- Salary parsing is now exercised against live payloads. Dot-grouped thousands (`80.000 EUR`), European decimal
+  commas (`$35,3k` read as `353k`), and the loose `¥`→CNY `cn` heuristic remain known gaps. In the Step 4 run, 126
+  rows had a raw salary token; 101 parsed (80.2%). Currency mix was USD-dominant, so CNY/JPY behavior was not
+  exercised.
+- `TITLE_ACRONYMS` is a finite explicit list; unlisted acronyms and product names are still title-cased.
+- Demand and related counts exclude rows with a null `external_id` (`G-02`), and combo keys are joined strings (`G-01`).

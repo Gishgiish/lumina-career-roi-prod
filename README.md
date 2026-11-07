@@ -4,8 +4,9 @@ Labor-market intelligence **prototype** that estimates salary premiums for techn
 
 > **Project status:** working demo, pre-production data layer.
 > The bundled demo runs on **synthetic seed data**. The live ingestion pipeline is implemented and the P0 data-path
-> defects (currency conversion, deduplication, Gold hygiene, salary-less handling) are fixed, but there is no
-> verified real ingestion run yet and no scheduler or data-freshness signal. See
+> defects (currency conversion, deduplication, Gold hygiene, salary-less handling, live salary parsing) are fixed.
+> One scratch live run (keyless sources) produced plausible salary statistics on 2026-11-07, but there is no
+> scheduler or data-freshness signal. See
 > [`CODEBASE_STATUS.md`](CODEBASE_STATUS.md) for the verified audit, evidence, and remediation plan.
 
 ## What it does
@@ -69,7 +70,7 @@ make lint
 cd frontend && npm run lint && npm run build
 ```
 
-Current status: 135 backend tests pass, `uv run ruff check src/ scripts/ tests/` is clean, and frontend
+Current status: 155 backend tests pass, `uv run ruff check src/ scripts/ tests/` is clean, and frontend
 lint/build pass.
 
 ### 6. Run against an isolated data root (optional)
@@ -171,7 +172,7 @@ registered; the two key-gated sources are skipped.
 
 ## Testing
 
-- Backend: 11 test files, 135 tests passing.
+- Backend: 11 test files, 155 tests passing.
 - Covered: Gold builders, Silver normalization helpers, path resolution, validation, deduplication, the seed
   script, and the API surface.
 - Not covered: `orchestrator.py` and six of the eight source adapters (Adzuna and a HackerNews currency-contract test
@@ -214,11 +215,19 @@ tests/                         Backend tests
 
 The full, evidence-based list is in [`CODEBASE_STATUS.md`](CODEBASE_STATUS.md). The highest-impact remaining items are:
 
-- The demo is synthetic; no verified real ingestion run exists yet (Step 4).
+- The bundled demo is synthetic. Scratch live runs (2026-11-07, keyless sources) produced plausible salary statistics
+  after the parsing fixes, but they are not scheduled, not committed as data, and the source mix limits salary coverage
+  to ~3%.
 - Currency conversion uses static FY2025/26 FX rates; there is no live rate refresh.
-- Skill extraction is keyword/heuristic, so it has false positives and misses.
-- Salary-based marts cover only postings with a parseable salary; the seed demo coverage is 87.5%, and real
-  coverage depends on the source mix.
+- Salary parsing has known edge cases: dot-grouped thousands (`80.000 EUR`) and European decimal commas (`$35,3k`)
+  are not handled, `¥` defaults to CNY when the string contains `cn` anywhere, otherwise JPY, and HackerNews hourly
+  rates whose period suffix is stripped (`$55 - $75`) are left unparsed.
+- Skill extraction is keyword/heuristic, so it has false positives and misses. Title acronym restoration uses a finite
+  explicit list.
+- Salary-based marts cover only postings with a parseable salary; the seed demo coverage is 87.5%, while the
+  keyless live run observed 2.9% (Greenhouse and Arbeitnow publish no salary).
+- Demand and skill co-occurrence counts ignore postings with a null `external_id`; skill-combination keys are
+  `", "`-joined strings.
 - There is no scheduler or data-freshness signal; `make ingest` is manual.
 - The B2B pages are static copy with hardcoded statistics; “Book a Demo” links back to the same page.
 - PostgreSQL is unused, and there is no authentication or personalization.
