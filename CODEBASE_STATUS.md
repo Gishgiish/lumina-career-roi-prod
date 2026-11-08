@@ -1,8 +1,8 @@
 # Lumina Career ROI — Codebase Status and Audit
 
 **Prepared:** 2026-11-04\
-**Last updated:** 2026-11-07 — Steps 1–5 committed; Step 4 live scratch runs fixed the P0 salary path, and Step 5 tightened skill-extraction precision; see §10.\
-**Baseline:** commit `42c3218` (`Add data-correctness remediation (Steps 1-3) and review fixes`) plus the Step 4 and Step 5 commits; working tree clean
+**Last updated:** 2026-11-08 — Steps 1–6 implemented; Step 4 live scratch runs fixed the P0 salary path, Step 5 tightened skill-extraction precision, and Step 6 made Gold marts technical-only, with a pre-commit fix restoring hyphenated aliases; see §10.\
+**Baseline:** commit `12e75bc` (Step 5) plus uncommitted Step 6 changes; working tree otherwise clean
 **Method:** full read of backend, pipeline, frontend, infra, tests, and CI; inspection of the generated data; execution of
 the test, lint, and build suites; direct reproduction of the defects listed here.
 
@@ -27,15 +27,18 @@ heuristic skill extraction, and one unscheduled scratch live run (not committed 
 **Bottom line:** do not treat the current output as production labor-market intelligence. The synthetic demo is now
 internally consistent; real ingestion, freshness, and serving hardening remain.
 
-**Step status (2026-11-07): Steps 1–5 are complete.** Backend lint and tests are green (168 tests),
+**Step status (2026-11-08): Steps 1–6 are complete.** Backend lint and tests are green (197 tests),
 scratch data/state isolation exists, the seed and pipeline share one Gold builder, currency and dedup regressions are
 fixed, and Gold hygiene plus the salary-less policy are implemented and covered by tests. Step 4 ran three times into
 scratch: run 1 exposed corrupt live salaries; after the HN parsing, salary-period, and plausibility fixes run 2 looked
 plausible, but review found that description-wide bare-amount matching still treated funding, savings, and revenue
 figures as salaries. Bare amounts are now trusted only in a pipe header or on payroll-vocabulary lines, and run 3
 re-verified the result. Step 5 then tightened skill extraction: ambiguous one-word skills (`Go`/`C`/`R`) require
-language context, `Hiring` is no longer a skill, tags stay authoritative, and slash aliases match. Remaining gaps are
-generic soft-skill over-counting, source health, coverage, and freshness.
+language context, `Hiring` is no longer a skill, tags stay authoritative, and slash aliases match. Step 6 added skill
+tiers (270 technical, 15 soft), made the Gold marts technical-only, and gated generic terms and recruiting prose.
+A pre-commit review fix restored hyphenated aliases (PCI-DSS, GPT-4, high-level design, and others), so the final
+rebuild reports 2,824 technical jobs and 239 technical skills. Remaining gaps are source health, salary coverage, and
+freshness.
 
 ---
 
@@ -43,16 +46,16 @@ generic soft-skill over-counting, source health, coverage, and freshness.
 
 | Area | Verified fact |
 |---|---|
-| Git | `main`, 7 commits, no branches. HEAD is the Step 5 skill-precision commit; the previous baselines were `42c3218` and the Step 4 salary fix, and the 2026-11-04 review baseline was `e1848d3` plus uncommitted work |
-| Uncommitted changes | None after the Step 5 commit (2026-11-07) |
+| Git | `main`, 7 commits, no branches. HEAD is `12e75bc` (Step 5); Step 6 changes are uncommitted pending review |
+| Uncommitted changes | Step 6 skill-tiering changes (taxonomy, Silver, Gold, tests, docs) |
 | Documentation cleanup | On 2026-11-04 this status file was added, `README.md` was rewritten to match the code, and `AUDIT_PLAN.md`, `lumina_audit_report.md`, and `frontend/README.md` were deleted. `42c3218` also records those two audit-file deletions |
-| Backend tests | `168 passed` (was `166` after Step 5's first pass, `155` after Step 4, `144` after the first Step 4 review, `135` after Step 3, `109` after Step 2.2, `102` after 2.1, `85` after Step 1, `59` before Step 1) |
+| Backend tests | `197 passed` (was `195` after the Step 6 first pass, `168` after Step 5, `166` after Step 5's first pass, `155` after Step 4, `144` after the first Step 4 review, `135` after Step 3, `109` after Step 2.2, `102` after 2.1, `85` after Step 1, `59` before Step 1) |
 | Backend lint | **Passes.** `uv run ruff check src/ scripts/ tests/` is clean. `I001` fixed 2026-11-07; `BLE001` was already fixed in the working tree |
 | Frontend lint | `npm run lint` passes |
 | Frontend build | `npm run build` passes; Next.js performs TypeScript checking during the build |
 | API | All 11 public endpoints respond against seed data and against the scratch live run (1.8–17.5 ms per request in-process) |
 | Data | 800 synthetic rows, 6 sources, 82 skills represented, 700 salaried jobs (87.5% coverage), 7 Gold marts, files regenerated 2026-11-07 |
-| Live pipeline evidence | **Scratch run only** (2026-11-07, keyless 6, run 4): 5 sources produced data, 3,518 Bronze → 3,269 Silver, 96 salaried (2.9%), 251 skills, 7 Gold marts. Kept under `/tmp/opencode/lumina-step4`; default demo data and watermark untouched. Lever yielded zero jobs (all boards 404) |
+| Live pipeline evidence | **Scratch run only** (2026-11-07, keyless 6, run 4): 5 sources produced data, 3,518 Bronze → 3,269 Silver, 96 salaried (2.9%), 251 skills, 7 Gold marts. Step 6 rebuilt the same Bronze deterministically: 2,824 jobs with a technical skill, Gold demand 251 → 239 skills, top demand Python 588 / Monitoring 578 / AWS 548; zero technical skills lost outside the four gated generic terms, and hyphenated aliases restored (PCI-DSS, GPT-4, high-level design, multi-agent, Fine-tuning, Scikit-learn, Objective-C). Kept under `/tmp/opencode/lumina-step4` and `/tmp/opencode/lumina-step6`; default demo data and watermark untouched. Lever yielded zero jobs (all boards 404) |
 | PostgreSQL | Provisioned in compose; zero application code uses it |
 | Scheduling | No cron, CI schedule, or Prefect deployment in the repository |
 | Frontend tests | None |
@@ -330,9 +333,9 @@ now accepted only in a pipe-delimited header or on a line with payroll vocabular
 amounts remain trusted anywhere.
 
 Remaining after the fix: HN hourly/monthly rates whose period suffix is stripped (`$55 - $75`, `$70-150`, `€5,000`)
-are extracted but stay unparsed; comma-decimal values such as `"$35,3k"` are read as `353k`; the Step 5 skill
-precision pass still leaves generic soft skills over-counted (see D-08); and full-set combos still reach 48 skills.
-These are P1.
+are extracted but stay unparsed; comma-decimal values such as `"$35,3k"` are read as `353k`; Step 6 removed generic
+soft-skill noise from Gold, though `Monitoring` stays high through the legitimate `observability` alias; and full-set
+combos still reach 46 skills. These are P1.
 
 ### P1 — User-visible defects, freshness, and business accuracy
 
@@ -444,12 +447,15 @@ Verified in run 4: `Hiring` absent; Go `871 → 320` (10.0%), C `836 → 82` (2.
 non-ambiguous skills lost matches; mean skills/job `7.95 → 7.30`; max combo `49 → 48`. Coverage:
 `tests/test_taxonomy.py`, `tests/test_silver.py::TestExtractSkillsList`.
 
-**Residual warning:** generic soft skills still dominate demand — Communication 50.3%, Cross-functional Collaboration
-41.8%, Strategic Planning 40.6%, Monitoring 25.4%, Mentoring 20.6%. These are legitimate phrases but are over-counted
-by full-prose matching. `Recruiting` (17.1%) is also inflated by process/team prose (“recruiting team”, “recruitment
-process”), even though the “hiring” verb is gone. Deciding whether ROI/demand should be technical-only, and how to gate
-recruiting, is the next P1, not part of Step 5. Multi-word slash tags (`ruby/rails`) still need explicit aliases, and
-combos can reach 48 because descriptions mention many tools.
+**Residual warning (updated in Step 6):** soft skills no longer appear in the Gold marts. The 15 soft skills
+(Communication, Cross-functional Collaboration, Strategic Planning, Team Leadership, Mentoring, Recruiting,
+Performance Management, Technical Writing, Public Speaking, Interpersonal Skills, Client Communication, Negotiation,
+Presentation, English, German) remain in Silver but are filtered from ROI, demand, overlap, related, distribution, and
+unique-skill counting. Bare generic words (`monitoring`, `compliance`, `networking`, `accessibility`) are no longer
+awarded from description prose; only their specific aliases or curated tags count. `Recruiting` prose requires a
+people/HR title or an explicit hiring phrase. After the same-Bronze rebuild, Monitoring remains #2 (578, 20.5%) because
+`observability` is a genuine and common alias, not because of the bare word. Multi-word slash tags (`ruby/rails`) still
+need explicit aliases, and combos can reach 46 because descriptions mention many tools.
 
 #### D-09 — Seed and production Gold are separate implementations that have diverged
 
@@ -492,10 +498,10 @@ Status: **open.**
 
 #### T-01 — Test and CI coverage does not protect the risky code
 
-Updated after Step 5 (2026-11-07):
+Updated after Step 6 (2026-11-08):
 
-- 168 backend tests pass (20 Step 4 regressions plus 13 Step 5 regressions: ambiguous `Go`/`C`/`R` context gating,
-  `Hiring` removal, tag casing, slash aliases, markup attributes, and a Silver-level skill-extraction boundary test).
+- 197 backend tests pass (20 Step 4 regressions, 13 Step 5 regressions, and 29 Step 6 regressions: skill tiers,
+  generic-term gate, recruiting gate/title plumbing, technical-only marts, and hyphenated-alias matching).
 - Gold builders (`tests/test_gold.py`), Silver normalization and skill extraction (`tests/test_silver.py`), taxonomy
   extraction (`tests/test_taxonomy.py`), path/state resolution (`tests/test_paths.py`), the seed script
   (`tests/test_seed.py`, subprocess smoke), currency detection/parsing plus the Adzuna and HackerNews currency
@@ -636,9 +642,9 @@ These are product decisions, not code decisions:
 
 ### Recommended: finish the data-correctness pass before adding features
 
-Steps 1–5 are done. Remaining is P1 hardening, not another correctness gate: soft-skill tiering in the ROI/demand
-marts (D-08 residual), source health (Lever/Greenhouse boards), salary coverage from salary-less sources,
-comma-decimal parsing, and a data-as-of manifest/scheduler (O-01). Estimate: **~1–2 focused engineering days**.
+Steps 1–6 are done. Remaining is P1 hardening, not another correctness gate: source health (Lever/Greenhouse boards),
+salary coverage from salary-less sources, comma-decimal parsing, and a data-as-of manifest/scheduler (O-01). Estimate:
+**~1–2 focused engineering days**.
 
 #### Step 1 — Green baseline and safe test environment — **COMPLETE (2026-11-07)**
 
@@ -860,8 +866,47 @@ Remaining after Step 5: generic soft skills still dominate demand (Communication
 Collaboration 41.8%, Strategic Planning 40.6%); a technical-vs-soft tiering decision is the next P1. Combos still reach
 48 skills, and slash tags such as `ruby/rails` need explicit aliases.
 
-Remaining for a trustworthy path: soft-skill tiering (D-08 residual), dead/zero-yield sources (Lever), low salary
-coverage from salary-less sources, comma-decimal salary parsing (`$35,3k`), and no data-as-of manifest. Do not run
+#### Step 6 — Technical-only Gold marts and generic-term gating — **COMPLETE (2026-11-07)**
+
+Delivered:
+
+- `Skill.tier` (`technical` by default; 15 soft skills marked), `TECHNICAL_SKILLS` / `SOFT_SKILLS`, `get_skill_tier()`,
+  and additive tier counts in `/api/v1/taxonomy` (270 technical / 15 soft).
+- Gold marts rank technical skills only: `_technical_only` is applied to ROI, demand, overlap, related, distribution,
+  and unique-skill counting. Soft skills remain in Silver. `job_share` now uses jobs with at least one technical skill;
+  `market_overview.total_jobs` still counts every Silver row and `total_unique_skills` is technical-only.
+- Generic-term gate: bare `monitoring`, `compliance`, `networking`, and `accessibility` in description text are ignored;
+  specific aliases (observability/Prometheus/Datadog, GDPR/HIPAA/PCI-DSS/ISO 27001, TCP/IP/load balancing/VPC,
+  a11y/WCAG) and curated tags still award them.
+- Hyphen-aware alias pass: the tokenizer splits on `-`, so aliases containing a hyphen (`pci-dss`, `gpt-4`, `gpt-4o`,
+  `high-level design`, `multi-agent`, `client-facing`, `fine-tuning`, `scikit-learn`, `objective-c`,
+  `object-oriented programming`) are matched directly with word/hyphen boundaries. A hyphen in the alias also matches
+  whitespace, so `PCI-DSS` and `PCI DSS` behave identically.
+- `Recruiting` gate: description prose requires a people/HR title (`recruit*`, talent, people ops, HR) or an explicit
+  hiring phrase (`talent acquisition`, `technical recruiting`, `recruiter`); tags stay authoritative.
+- Same-Bronze deterministic rebuild (run-4 Bronze, no network, no R2): 3,269 Silver rows, 2,824 jobs with a technical
+  skill; Gold demand 251 → 239 skills; ROI 156 → 146; overlap 70 → 61; related 8,062 → 6,152; salary distribution
+  386 → 348; max combo 48 → 46.
+- Top technical demand: Python 588 (20.8%), Monitoring 578 (20.5%), AWS 548, SQL 466, Google Cloud 460. Soft skills are
+  absent from every mart; `Recruiting` Silver mentions fell 546 → 318.
+- The four gated generic terms remain the only technical losses. The hyphen pass adds three technical skills
+  (Fine-tuning, Scikit-learn, Objective-C) and increases AI Agents 166 → 177 and Object-Oriented Programming 4 → 20;
+  `Compliance` recovers one live PCI-DSS posting (70 → 71).
+- 11/11 API endpoints 200; default data checksums unchanged; no R2 activity.
+
+Evidence:
+
+```bash
+PYTHONPATH=. uv run pytest tests/ -q          # 197 passed
+uv run ruff check src/ scripts/ tests/       # All checks passed
+```
+
+Remaining after Step 6: `Monitoring` remains #2 because `observability` is a genuine, common alias; source health
+(dead Lever, six 404 Greenhouse boards), salary coverage (~3%), comma-decimal parsing, HN hourly period loss, and the
+data-as-of manifest are still P1. Combos still reach 46, and slash tags such as `ruby/rails` need explicit aliases.
+
+Remaining for a trustworthy path: dead/zero-yield sources (Lever), low salary coverage from salary-less sources,
+comma-decimal salary parsing (`$35,3k`), and no data-as-of manifest. Do not run
 `make ingest` for reruns: `scripts/orchestrator.py` ends with `task_sync_to_cloud()` and uploads to R2.
 
 ### Exit criteria for “trustworthy data path”
@@ -1000,6 +1045,30 @@ marts:  single_skill_roi=156, skill_demand=251, skill_overlap=70,
         skill_related=8062, salary_distribution=386, top_skills=10
 skills: Hiring absent; Go=320 (10.0%), C=82 (2.6%), R=78 (2.4%);
         mean skills/job=7.30 (was 7.95); max combo=48 (was 49)
+API:    11/11 endpoints returned 200
+```
+
+After Step 6 (2026-11-08, same Bronze, Silver+Gold rebuilt deterministically, no network/R2):
+
+```bash
+PYTHONPATH=. uv run pytest tests/ -q          # 197 passed
+uv run ruff check src/ scripts/ tests/       # All checks passed
+
+# isolation:
+diff default-data-preflight.sha256 default-data-postflight.sha256    # identical
+```
+
+```text
+market: total_jobs=3269, jobs_with_salary=96, salary_coverage_rate=0.0294,
+        total_unique_skills=239, average_salary_usd=153903.27,
+        median_salary_usd=157500.00, top_source_count=5
+marts:  single_skill_roi=146, skill_demand=239, skill_overlap=61,
+        skill_related=6152, salary_distribution=348, top_skills=10
+skills: soft skills absent from every mart; Recruiting 546 -> 318;
+        top demand Python=588, Monitoring=578, AWS=548, SQL=466, GCP=460;
+        max combo=46 (was 48); technical losses only the four gated terms;
+        hyphen aliases restored (PCI-DSS, GPT-4, high-level design;
+        Fine-tuning 30, Scikit-learn 15, Objective-C 5); Compliance 70 -> 71
 API:    11/11 endpoints returned 200
 ```
 

@@ -16,6 +16,9 @@ class Skill:
     canonical: str
     category: str
     aliases: tuple[str, ...] = field(default_factory=tuple)
+    # "technical" vs "soft": soft skills stay in Silver but are excluded from
+    # the default Gold marts, which rank technical demand.
+    tier: str = "technical"
 
 # Curated taxonomy of technical and professional skills.
 SKILLS: list[Skill] = [
@@ -270,25 +273,25 @@ SKILLS: list[Skill] = [
     Skill("OKRs", "Project Management", ("objectives and key results",)),
     Skill("KPI Tracking", "Project Management", ("key performance indicators",)),
     Skill("Technical Leadership", "Leadership", ("tech lead", "engineering leadership")),
-    Skill("Team Leadership", "Leadership", ("team lead", "people management")),
-    Skill("Mentoring", "Leadership", ("mentorship", "coaching")),
-    Skill("Strategic Planning", "Leadership", ("strategy",)),
-    Skill("Cross-functional Collaboration", "Leadership", ("cross functional",)),
+    Skill("Team Leadership", "Leadership", ("team lead", "people management"), tier="soft"),
+    Skill("Mentoring", "Leadership", ("mentorship", "coaching"), tier="soft"),
+    Skill("Strategic Planning", "Leadership", ("strategy",), tier="soft"),
+    Skill("Cross-functional Collaboration", "Leadership", ("cross functional",), tier="soft"),
     # "Hiring" itself is excluded: the verb appears in nearly every posting and
     # swamped the demand signal. Only recruiting-specific terms count.
-    Skill("Recruiting", "Leadership", ("recruiting", "talent acquisition", "technical recruiting")),
-    Skill("Performance Management", "Leadership", ("performance reviews",)),
+    Skill("Recruiting", "Leadership", ("recruiting", "talent acquisition", "technical recruiting"), tier="soft"),
+    Skill("Performance Management", "Leadership", ("performance reviews",), tier="soft"),
 
     # ========== Communication & Soft Skills ==========
-    Skill("Communication", "Communication", ("communication skills",)),
-    Skill("Technical Writing", "Communication", ("documentation", "api documentation")),
-    Skill("Public Speaking", "Communication", ("presentation skills",)),
-    Skill("Interpersonal Skills", "Communication", ("soft skills",)),
-    Skill("Client Communication", "Communication", ("client-facing",)),
-    Skill("Negotiation", "Communication", ()),
-    Skill("Presentation", "Communication", ("slide decks", "powerpoint")),
-    Skill("English", "Communication", ("fluent english",)),
-    Skill("German", "Communication", ("german language",)),
+    Skill("Communication", "Communication", ("communication skills",), tier="soft"),
+    Skill("Technical Writing", "Communication", ("documentation", "api documentation"), tier="soft"),
+    Skill("Public Speaking", "Communication", ("presentation skills",), tier="soft"),
+    Skill("Interpersonal Skills", "Communication", ("soft skills",), tier="soft"),
+    Skill("Client Communication", "Communication", ("client-facing",), tier="soft"),
+    Skill("Negotiation", "Communication", (), tier="soft"),
+    Skill("Presentation", "Communication", ("slide decks", "powerpoint"), tier="soft"),
+    Skill("English", "Communication", ("fluent english",), tier="soft"),
+    Skill("German", "Communication", ("german language",), tier="soft"),
 
     # ========== Design & UX ==========
     Skill("UI/UX Design", "Design & UX", ("user experience", "user interface", "ux design", "ui design", "ui/ux")),
@@ -343,12 +346,52 @@ SKILLS_BY_CATEGORY: dict[str, list[Skill]] = {}
 for skill in SKILLS:
     SKILLS_BY_CATEGORY.setdefault(skill.category, []).append(skill)
 
+# Tier indexes. Gold marts default to technical skills; soft skills remain in
+# Silver so a soft-inclusive view can be rebuilt later without re-ingestion.
+SKILLS_BY_NAME: dict[str, Skill] = {skill.canonical: skill for skill in SKILLS}
+TECHNICAL_SKILLS = frozenset(
+    skill.canonical for skill in SKILLS if skill.tier == "technical"
+)
+SOFT_SKILLS = frozenset(skill.canonical for skill in SKILLS if skill.tier == "soft")
+
 
 # Skill names that are also common English words or single letters. These are
 # matched from free text only when the surrounding text identifies them as a
 # programming language; tags and unambiguous aliases ("golang", "R language")
 # are always trusted.
 _AMBIGUOUS_SURFACES = frozenset({"c", "r", "go"})
+
+# Canonical names that are ordinary English words. The bare word in free
+# description text is too weak to prove the skill, so it is skipped there;
+# curated source tags and the specific aliases below still award it:
+#   Monitoring <- observability, Prometheus, Datadog
+#   Compliance <- GDPR, HIPAA, PCI-DSS, ISO 27001
+#   Networking <- TCP/IP, load balancing, VPC
+#   Accessibility <- a11y, WCAG
+_GENERIC_BARE_SURFACES = frozenset(
+    {"monitoring", "compliance", "networking", "accessibility"}
+)
+
+# Recruiting is generic prose in most postings ("recruitment process",
+# "recruiting team"), so description text awards it only for people/HR roles
+# or explicit hiring phrases. Curated source tags are still trusted.
+_RECRUITING_TITLE_RE = re.compile(
+    r"\b(?:recruit\w*|talent|people\s+ops|people\s+operations|"
+    r"human\s+resources|hr)\b",
+    re.IGNORECASE,
+)
+_RECRUITING_BODY_RE = re.compile(
+    r"\b(?:talent\s+acquisition|technical\s+recruiting|recruiters?)\b",
+    re.IGNORECASE,
+)
+
+
+def _recruiting_match_allowed(description: str, context: str) -> bool:
+    """True when the role or text is explicitly about recruiting/hiring."""
+    return bool(
+        _RECRUITING_TITLE_RE.search(context or "")
+        or _RECRUITING_BODY_RE.search(description)
+    )
 
 _AMBIGUOUS_PATTERNS = {
     # Hyphenated prose ("go-to-market", "c-suite") is not a language.
@@ -393,6 +436,13 @@ _GAP_WORDS = frozenset(
 # "/", so match them directly against the cleaned text.
 _SLASH_ALIAS_LOOKUP: dict[str, Skill] = {
     alias: skill for alias, skill in _ALIAS_LOOKUP.items() if "/" in alias
+}
+
+# Hyphenated aliases ("PCI-DSS", "GPT-4", "high-level design") are also lost by
+# the tokenizer, which splits on "-", so match them directly with word- and
+# hyphen-aware boundaries.
+_HYPHEN_ALIAS_LOOKUP: dict[str, Skill] = {
+    alias: skill for alias, skill in _ALIAS_LOOKUP.items() if "-" in alias
 }
 
 
@@ -468,6 +518,19 @@ def _contains_slash_alias(text: str, alias: str) -> bool:
     return re.search(r"(?<![\w/])" + re.escape(alias) + r"(?![\w/])", text) is not None
 
 
+def _contains_hyphen_alias(text: str, alias: str) -> bool:
+    """Match *alias* without crossing word or hyphen boundaries.
+
+    A hyphen in the alias also matches whitespace, so ``PCI-DSS`` and
+    ``PCI DSS`` award the same skill. Rejecting hyphen neighbours keeps
+    ``gpt-4`` from matching inside ``gpt-4o`` and ``multi-agent`` from matching
+    a longer hyphenated word.
+    """
+    body = r"[-\s]".join(re.escape(part) for part in alias.split("-"))
+    pattern = r"(?<![\w-])" + body + r"(?![\w-])"
+    return re.search(pattern, text) is not None
+
+
 def normalize_skill(name: str) -> str | None:
     """
     Takes a raw skill name (from a source's tags, or extracted from text)
@@ -486,7 +549,9 @@ def normalize_skill(name: str) -> str | None:
     return None
 
 
-def extract_skills(text: str, extra_terms: list[str] | None = None) -> list[str]:
+def extract_skills(
+    text: str, extra_terms: list[str] | None = None, context: str = ""
+) -> list[str]:
     """
     Extract canonical skill names from arbitrary text (job descriptions,
     source tags, etc.).
@@ -495,7 +560,11 @@ def extract_skills(text: str, extra_terms: list[str] | None = None) -> list[str]
       1. Unescape HTML entities and treat source tags separately: tags are
          curated, so ambiguous names there ("go", "c") are trusted.
       2. In description text, ambiguous one-word skills are accepted only with
-         language context; slash aliases are matched directly.
+         language context; slash and hyphenated aliases are matched directly.
+         Bare generic words (monitoring, compliance, networking, accessibility)
+         are ignored unless a specific alias names them. Recruiting prose
+         requires a people/HR ``context`` (usually the job title) or an explicit
+         hiring phrase.
       3. For each token and multi-word phrase up to 3 words, check the alias
          table, then return deduplicated, canonical skill names.
 
@@ -529,12 +598,24 @@ def extract_skills(text: str, extra_terms: list[str] | None = None) -> list[str]
         if _contains_slash_alias(description, alias):
             add(skill.canonical)
 
+    # Hyphenated aliases ("PCI-DSS", "GPT-4", "high-level design") are likewise
+    # invisible because the tokenizer splits on "-".
+    for alias, skill in _HYPHEN_ALIAS_LOOKUP.items():
+        if _contains_hyphen_alias(description, alias):
+            add(skill.canonical)
+
+    recruiting_allowed = _recruiting_match_allowed(description, context)
     for candidate in _ngram_candidates(description):
+        if candidate in _GENERIC_BARE_SURFACES:
+            continue
         if candidate in _AMBIGUOUS_SURFACES and not _ambiguous_language_match(
             description, candidate
         ):
             continue
-        add(normalize_skill(candidate))
+        canonical = normalize_skill(candidate)
+        if canonical == "Recruiting" and not recruiting_allowed:
+            continue
+        add(canonical)
 
     # Sort for stable output
     found.sort()
@@ -547,7 +628,19 @@ def get_taxonomy_stats() -> dict:
         "total_skills": len(SKILLS),
         "total_aliases": sum(len(s.aliases) for s in SKILLS),
         "categories": {cat: len(items) for cat, items in SKILLS_BY_CATEGORY.items()},
+        "tiers": {
+            "technical": len(TECHNICAL_SKILLS),
+            "soft": len(SOFT_SKILLS),
+        },
     }
+
+
+def get_skill_tier(name: str) -> str | None:
+    """Return the tier of a canonical name or alias, or None if unknown."""
+    canonical = normalize_skill(name)
+    if canonical is None:
+        return None
+    return SKILLS_BY_NAME[canonical].tier
 
 
 def is_valid_skill(name: str) -> bool:

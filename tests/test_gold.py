@@ -35,6 +35,22 @@ def _rows_by(df: pl.DataFrame, key: str) -> dict:
     return {row[key]: row for row in df.to_dicts()}
 
 
+@pytest.fixture
+def silver_with_soft():
+    return pl.DataFrame({
+        "source": ["a", "a", "b", "b", "b"],
+        "external_id": ["1", "2", "3", "4", "5"],
+        "skills_list": [
+            ["Python", "SQL", "Communication"],
+            ["Python", "SQL", "Communication"],
+            ["Python", "Mentoring"],
+            ["Go", "Rust"],
+            ["Recruiting"],
+        ],
+        "expected_salary_usd": [100_000.0, 120_000.0, 140_000.0, 160_000.0, 90_000.0],
+    })
+
+
 class TestSingleSkillRoi:
     def test_metrics(self, silver):
         result = build_single_skill_roi(silver)
@@ -239,7 +255,7 @@ class TestMarketOverview:
         df = pl.DataFrame({
             "source": ["a", "b"],
             "external_id": ["1", "2"],
-            "skills_list": [["Python"], ["DemandOnly"]],
+            "skills_list": [["Python"], ["Go"]],
             "expected_salary_usd": [100_000.0, None],
         })
         result = build_market_overview(df)
@@ -329,7 +345,7 @@ class TestSalaryDistribution:
         df = pl.DataFrame({
             "source": ["a"] * len(salaries),
             "external_id": [str(i) for i in range(len(salaries))],
-            "skills_list": [["X"]] * len(salaries),
+            "skills_list": [["Python"]] * len(salaries),
             "expected_salary_usd": salaries,
         })
 
@@ -351,7 +367,7 @@ class TestSalaryDistribution:
         df = pl.DataFrame({
             "source": ["a"] * len(salaries),
             "external_id": [str(i) for i in range(len(salaries))],
-            "skills_list": [["X"]] * len(salaries),
+            "skills_list": [["Python"]] * len(salaries),
             "expected_salary_usd": salaries,
         })
 
@@ -413,3 +429,52 @@ class TestBuildGoldMarts:
     def test_missing_salary_column_raises(self, silver, tmp_path):
         with pytest.raises(ValueError, match="salary column"):
             build_gold_marts(silver.drop("expected_salary_usd"), tmp_path)
+
+
+class TestTechnicalOnlyMarts:
+    def test_roi_excludes_soft_skills(self, silver_with_soft):
+        rows = _rows_by(build_single_skill_roi(silver_with_soft), "skill")
+        assert set(rows) == {"Python", "SQL", "Go", "Rust"}
+
+    def test_demand_excludes_soft_skills_and_narrows_denominator(
+        self, silver_with_soft
+    ):
+        rows = _rows_by(build_skill_demand(silver_with_soft), "skill")
+
+        assert set(rows) == {"Python", "SQL", "Go", "Rust"}
+        # Job 5 only has a soft skill, so it is not in the denominator.
+        assert rows["Python"]["job_share"] == pytest.approx(3 / 4)
+        assert rows["SQL"]["job_share"] == pytest.approx(2 / 4)
+
+    def test_overlap_uses_technical_skills_only(self, silver_with_soft):
+        rows = _rows_by(build_skill_overlap(silver_with_soft), "skill_combo")
+
+        assert set(rows) == {"Python, SQL", "Go, Rust"}
+        assert rows["Python, SQL"]["combo_size"] == 2
+
+    def test_related_pairs_use_technical_skills_only(self, silver_with_soft):
+        pairs = build_skill_related(silver_with_soft)
+
+        assert pairs.select(["skill_a", "skill_b"]).rows() == [("Python", "SQL")]
+        assert pairs["co_occurrence_count"].to_list() == [2]
+
+    def test_salary_distribution_excludes_soft_skills(self, silver_with_soft):
+        skills = set(build_salary_distribution(silver_with_soft)["skill"].to_list())
+        assert skills == {"Python", "SQL", "Go", "Rust"}
+
+    def test_market_overview_counts_technical_skills_only(self, silver_with_soft):
+        market = build_market_overview(silver_with_soft)
+        metrics = dict(zip(market["metric"].to_list(), market["value"].to_list()))
+
+        assert metrics["total_jobs"] == 5.0
+        assert metrics["total_unique_skills"] == 4.0
+
+    def test_gold_marts_are_technical_only(self, silver_with_soft, tmp_path):
+        marts = build_gold_marts(silver_with_soft, tmp_path)
+
+        assert set(marts["skill_demand_mart"]["skill"].to_list()) == {
+            "Python",
+            "SQL",
+            "Go",
+            "Rust",
+        }

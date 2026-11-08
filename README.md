@@ -11,7 +11,8 @@ Labor-market intelligence **prototype** that estimates salary premiums for techn
 
 ## What it does
 
-- Maintains a curated taxonomy of **285 skills** with **298 aliases**.
+- Maintains a curated taxonomy of **285 skills** with **298 aliases** (270 technical, 15 soft). Gold marts rank
+  technical skills by default; the full skill list stays in Silver.
 - Ships **8 job-source adapters** (6 keyless, 2 key-gated).
 - Implements a medallion pipeline: Bronze NDJSON → Silver Parquet → 7 Gold marts.
 - Serves the marts through a FastAPI layer with 11 public endpoints.
@@ -70,7 +71,7 @@ make lint
 cd frontend && npm run lint && npm run build
 ```
 
-Current status: 168 backend tests pass, `uv run ruff check src/ scripts/ tests/` is clean, and frontend
+Current status: 197 backend tests pass, `uv run ruff check src/ scripts/ tests/` is clean, and frontend
 lint/build pass.
 
 ### 6. Run against an isolated data root (optional)
@@ -164,6 +165,8 @@ registered; the two key-gated sources are skipped.
 - Seed and pipeline share one Gold implementation (`build_gold_marts`), so the demo uses production Gold
   semantics: seven market metrics (including `jobs_with_salary` and `salary_coverage_rate`), related pairs
   filtered at `>= 2`, and a separate demand mart that counts salary-less postings.
+- Skill marts are technical-only by default: the 15 soft skills remain in Silver but are excluded from ROI, demand,
+  overlap, related, and distribution. `job_share` is the share of jobs with at least one technical skill.
 - Salary-less postings are retained in Silver (`has_salary = False`) for demand statistics. Salary-based marts
   (`single_skill_roi_mart`, `skill_overlap_mart`, `salary_distribution_mart`, `top_skills_mart`) cover only
   salaried jobs; `market_overview_mart` reports the resulting coverage rate.
@@ -172,7 +175,7 @@ registered; the two key-gated sources are skipped.
 
 ## Testing
 
-- Backend: 11 test files, 168 tests passing.
+- Backend: 11 test files, 197 tests passing.
 - Covered: Gold builders, Silver normalization and skill extraction, taxonomy extraction, path resolution, validation,
   deduplication, the seed script, and the API surface.
 - Not covered: `orchestrator.py` and six of the eight source adapters (Adzuna and a HackerNews currency-contract test
@@ -223,8 +226,11 @@ The full, evidence-based list is in [`CODEBASE_STATUS.md`](CODEBASE_STATUS.md). 
   are not handled, `¥` defaults to CNY when the string contains `cn` anywhere, otherwise JPY, and HackerNews hourly
   rates whose period suffix is stripped (`$55 - $75`) are left unparsed.
 - Skill extraction is keyword/heuristic, so it has false positives and misses. Ambiguous one-word skills
-  (`Go`/`C`/`R`) now require language context and `Hiring` is no longer a skill, but generic soft skills still
-  over-count (Communication, Cross-functional Collaboration, Strategic Planning). Title acronym restoration uses a
+  (`Go`/`C`/`R`) require language context; `Hiring` is not a skill; `Recruiting` prose requires a people/HR title or
+  an explicit hiring phrase; bare generic words (`monitoring`, `compliance`, `networking`, `accessibility`) only count
+  through specific aliases or tags. Slash and hyphenated aliases (`CI/CD`, `PCI-DSS`, `GPT-4`) are matched directly.
+  Soft skills stay in Silver but are excluded from Gold marts. `Monitoring` remains
+  high (#2 in the live run) because the `observability` alias is genuinely common. Title acronym restoration uses a
   finite explicit list.
 - Salary-based marts cover only postings with a parseable salary; the seed demo coverage is 87.5%, while the
   keyless live run observed 2.9% (Greenhouse and Arbeitnow publish no salary).

@@ -16,18 +16,25 @@ Data marts:
 
 The builders are pure (DataFrame in, DataFrame out); `build_gold_marts`
 is the only writer. Both the pipeline and the seed script use this module.
+
+Gold marts rank technical skills only. Soft skills remain in Silver, so a
+soft-inclusive view can be rebuilt without re-ingesting.
 """
 import logging
 from pathlib import Path
 
 import polars as pl
 
+from src.ingestion.skills_taxonomy import TECHNICAL_SKILLS
 from src.utils.paths import GOLD_DIR, SILVER_DIR
 
 logger = logging.getLogger(__name__)
 
 REQUIRED_COLUMNS = ("external_id", "skills_list", "source")
 SALARY_COLUMNS = ("expected_salary_usd", "expected_salary")
+
+# Sorted once so ``list.eval`` membership checks are deterministic.
+_TECHNICAL_LIST = sorted(TECHNICAL_SKILLS)
 
 # Integer ordering for salary buckets. Labels are the user-facing strings; the
 # integer lets the mart and the API return buckets in numeric order instead of
@@ -64,9 +71,28 @@ def _clean_skills(df_silver: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def _technical_only(df_silver: pl.DataFrame) -> pl.DataFrame:
+    """Keep only technical skills and drop jobs left without any.
+
+    Soft skills stay in Silver; the default Gold marts rank technical demand
+    only. Call after :func:`_clean_skills` so null/empty entries are gone.
+    Order inside ``skills_list`` is preserved.
+    """
+    return (
+        df_silver.with_columns(
+            pl.col("skills_list")
+            .list.eval(pl.element().filter(pl.element().is_in(_TECHNICAL_LIST)))
+            .alias("skills_list")
+        )
+        .filter(pl.col("skills_list").list.len() > 0)
+    )
+
+
 def _explode_skills(df_silver: pl.DataFrame) -> pl.DataFrame:
-    """Clean and explode ``skills_list`` so no null/empty skill is produced."""
-    return _clean_skills(df_silver).explode("skills_list", empty_as_null=False)
+    """Clean, keep technical skills, and explode ``skills_list``."""
+    return _technical_only(_clean_skills(df_silver)).explode(
+        "skills_list", empty_as_null=False
+    )
 
 
 
@@ -101,12 +127,13 @@ def _salary_rows(df_silver: pl.DataFrame, salary_col: str) -> pl.DataFrame:
 
 
 def _count_unique_skills(df_silver: pl.DataFrame) -> int:
-    """Count distinct skills across all jobs with usable skills.
+    """Count distinct technical skills across jobs with usable skills.
 
     Uses every job, not just salaried ones, so skills that only appear in
-    salary-less postings are not dropped from the market totals.
+    salary-less postings are not dropped from the market totals. Soft skills
+    are excluded so "tracked skills" matches the default marts.
     """
-    df_all = _clean_skills(df_silver)
+    df_all = _technical_only(_clean_skills(df_silver))
     if df_all.is_empty():
         return 0
     return int(
@@ -121,7 +148,7 @@ def build_single_skill_roi(
     salary_col: str | None = None,
     overall_avg_salary: float | None = None,
 ) -> pl.DataFrame:
-    """ROI metrics per individual skill, using salaried jobs only."""
+    """ROI metrics per individual technical skill, using salaried jobs only."""
     salary_col = salary_col or _resolve_salary_column(df_silver)
     df_paid = _salary_rows(df_silver, salary_col)
     if overall_avg_salary is None:
@@ -147,11 +174,12 @@ def build_skill_overlap(
     salary_col: str | None = None,
     overall_avg_salary: float | None = None,
 ) -> pl.DataFrame:
-    """ROI metrics for the complete skill set of each job (2+ skills).
+    """ROI metrics for the complete technical skill set of each job (2+ skills).
 
-    ``skill_combo`` is the job's full sorted skill set, not a pairwise
-    combination; ``combo_size`` makes the set size explicit. A job with four
-    skills produces one four-skill combo, not six two-skill pairs.
+    ``skill_combo`` is the job's full sorted technical skill set, not a
+    pairwise combination; ``combo_size`` makes the set size explicit. A job
+    with four technical skills produces one four-skill combo, not six pairs.
+    Jobs left with fewer than two technical skills are excluded.
     """
     salary_col = salary_col or _resolve_salary_column(df_silver)
     df_paid = _salary_rows(df_silver, salary_col)
@@ -159,7 +187,7 @@ def build_skill_overlap(
         overall_avg_salary = _overall_average(df_paid, salary_col)
 
     return (
-        _clean_skills(df_paid)
+        _technical_only(_clean_skills(df_paid))
         .filter(pl.col("skills_list").list.len() >= 2)
         .with_columns(
             pl.col("skills_list").list.len().alias("combo_size"),
@@ -191,7 +219,7 @@ def build_market_overview(
     Headcount metrics count every job in Silver. Salary metrics use only jobs
     with a salary; ``salary_coverage_rate`` makes the resulting coverage gap
     explicit instead of silently dropping rows. ``total_unique_skills`` counts
-    skills across all jobs, including salary-less postings.
+    technical skills across all jobs, including salary-less postings.
     """
     salary_col = salary_col or _resolve_salary_column(df_silver)
     df_paid = _salary_rows(df_silver, salary_col)
@@ -240,11 +268,12 @@ def build_top_skills(skill_mart: pl.DataFrame) -> pl.DataFrame:
 def build_skill_demand(df_silver: pl.DataFrame) -> pl.DataFrame:
     """Per-skill demand across ALL jobs, including salary-less postings.
 
-    ``job_share`` is the fraction of jobs-with-skills that mention the skill.
-    The salary-based ``single_skill_roi_mart`` intentionally covers only jobs
-    with a salary; this mart is the unbiased demand view.
+    ``job_share`` is the fraction of jobs with at least one technical skill
+    that mention the skill. The salary-based ``single_skill_roi_mart``
+    intentionally covers only jobs with a salary; this mart is the unbiased
+    technical-demand view.
     """
-    df_all = _clean_skills(df_silver)
+    df_all = _technical_only(_clean_skills(df_silver))
     if df_all.is_empty():
         return pl.DataFrame(
             schema={
@@ -269,7 +298,7 @@ def build_skill_demand(df_silver: pl.DataFrame) -> pl.DataFrame:
 
 
 def build_skill_related(df_silver: pl.DataFrame) -> pl.DataFrame:
-    """Co-occurring skill pairs, keeping pairs seen in 2+ jobs.
+    """Co-occurring technical skill pairs, keeping pairs seen in 2+ jobs.
 
     Pairs are canonicalized so ``skill_a < skill_b`` and each unordered pair is
     emitted once. The count is the number of distinct jobs containing the pair,
@@ -312,7 +341,7 @@ def build_salary_distribution(
     df_silver: pl.DataFrame,
     salary_col: str | None = None,
 ) -> pl.DataFrame:
-    """Per-skill salary bucket counts for histogram rendering.
+    """Per-skill salary bucket counts for technical-skill histograms.
 
     Salary-less jobs are excluded: a null salary would otherwise fall through
     the ``when`` chain into the highest bucket.

@@ -43,6 +43,20 @@ class TestExtractSkillsList:
     def test_tags_are_authoritative(self):
         assert "Go" in _extract_skills_list(["go"], "We go to market.")
 
+    def test_recruiting_uses_title_context(self):
+        text = "You will support the recruiting process."
+        assert "Recruiting" not in _extract_skills_list([], text)
+        assert "Recruiting" in _extract_skills_list([], text, "Technical Recruiter")
+        assert "Recruiting" not in _extract_skills_list([], text, "Software Engineer")
+
+    def test_recruiting_explicit_phrase_needs_no_title(self):
+        assert "Recruiting" in _extract_skills_list(
+            [], "Technical recruiting experience.", "Software Engineer"
+        )
+
+    def test_recruiting_tags_stay_authoritative(self):
+        assert "Recruiting" in _extract_skills_list(["recruiting"], "", "Software Engineer")
+
 
 class TestAddSalaryMetrics:
     def test_midpoint_of_min_and_max(self):

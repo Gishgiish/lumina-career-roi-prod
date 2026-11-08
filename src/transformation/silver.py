@@ -72,9 +72,11 @@ def _standardize_title(title_col: str = "title") -> pl.Expr:
     return expr
 
 
-def _extract_skills_list(tags: list[str], description: str) -> list[str]:
-    """Extract canonical skills from tags + description."""
-    return extract_skills(description, extra_terms=tags)
+def _extract_skills_list(
+    tags: list[str], description: str, title: str = ""
+) -> list[str]:
+    """Extract canonical skills from tags + description, with title context."""
+    return extract_skills(description, extra_terms=tags, context=title)
 
 
 def _add_salary_metrics(df: pl.DataFrame) -> pl.DataFrame:
@@ -145,10 +147,14 @@ def transform_bronze_to_silver() -> bool:
                 .str.to_lowercase()
                 .str.strip_chars(),
 
-            # 3. Extract skills from tags + description
-            pl.struct(["tags", "description"])
+            # 3. Extract skills from tags + description (title provides context)
+            pl.struct(["tags", "description", "title"])
                 .map_elements(
-                    lambda row: _extract_skills_list(row["tags"] or [], row["description"] or ""),
+                    lambda row: _extract_skills_list(
+                        row["tags"] or [],
+                        row["description"] or "",
+                        row["title"] or "",
+                    ),
                     return_dtype=pl.List(pl.Utf8),
                 )
                 .alias("skills_list"),
