@@ -2,7 +2,7 @@
 
 **Prepared:** 2026-11-04\
 **Last updated:** 2026-11-08 — Steps 1–6 implemented; Step 4 live scratch runs fixed the P0 salary path, Step 5 tightened skill-extraction precision, and Step 6 made Gold marts technical-only, with a pre-commit fix restoring hyphenated aliases; see §10.\
-**Baseline:** commit `12e75bc` (Step 5) plus uncommitted Step 6 changes; working tree otherwise clean
+**Baseline:** commit `de29d02` (Step 6); working tree clean and in sync with `origin/main`
 **Method:** full read of backend, pipeline, frontend, infra, tests, and CI; inspection of the generated data; execution of
 the test, lint, and build suites; direct reproduction of the defects listed here.
 
@@ -22,7 +22,7 @@ deduplication (Step 2.2), and the Gold hygiene/salary-less work (Step 3) are com
 contaminate the marts, related pairs are canonicalized, salary buckets are ordered numerically, title casing preserves
 acronyms, and salary-less jobs are retained for demand statistics while salary-based marts exclude them and report
 coverage. Remaining gaps are operational and accuracy-related: no scheduler or data-freshness signal, static FX rates,
-heuristic skill extraction, and one unscheduled scratch live run (not committed as data).
+heuristic skill extraction, and unscheduled scratch live runs (not committed as data).
 
 **Bottom line:** do not treat the current output as production labor-market intelligence. The synthetic demo is now
 internally consistent; real ingestion, freshness, and serving hardening remain.
@@ -46,16 +46,16 @@ freshness.
 
 | Area | Verified fact |
 |---|---|
-| Git | `main`, 7 commits, no branches. HEAD is `12e75bc` (Step 5); Step 6 changes are uncommitted pending review |
-| Uncommitted changes | Step 6 skill-tiering changes (taxonomy, Silver, Gold, tests, docs) |
+| Git | `main`, 8 commits, no branches. HEAD is `de29d02` (Step 6), in sync with `origin/main` |
+| Uncommitted changes | None (working tree clean) |
 | Documentation cleanup | On 2026-11-04 this status file was added, `README.md` was rewritten to match the code, and `AUDIT_PLAN.md`, `lumina_audit_report.md`, and `frontend/README.md` were deleted. `42c3218` also records those two audit-file deletions |
 | Backend tests | `197 passed` (was `195` after the Step 6 first pass, `168` after Step 5, `166` after Step 5's first pass, `155` after Step 4, `144` after the first Step 4 review, `135` after Step 3, `109` after Step 2.2, `102` after 2.1, `85` after Step 1, `59` before Step 1) |
 | Backend lint | **Passes.** `uv run ruff check src/ scripts/ tests/` is clean. `I001` fixed 2026-11-07; `BLE001` was already fixed in the working tree |
-| Frontend lint | `npm run lint` passes |
-| Frontend build | `npm run build` passes; Next.js performs TypeScript checking during the build |
+| Frontend lint | `npm run lint` passes (last verified 2026-11-08) |
+| Frontend build | `npm run build` passes; Next.js performs TypeScript checking during the build (last verified 2026-11-07; build output was deleted in the 2026-11-08 cleanup and regenerates on demand) |
 | API | All 11 public endpoints respond against seed data and against the scratch live run (1.8–17.5 ms per request in-process) |
 | Data | 800 synthetic rows, 6 sources, 82 skills represented, 700 salaried jobs (87.5% coverage), 7 Gold marts, files regenerated 2026-11-07 |
-| Live pipeline evidence | **Scratch run only** (2026-11-07, keyless 6, run 4): 5 sources produced data, 3,518 Bronze → 3,269 Silver, 96 salaried (2.9%), 251 skills, 7 Gold marts. Step 6 rebuilt the same Bronze deterministically: 2,824 jobs with a technical skill, Gold demand 251 → 239 skills, top demand Python 588 / Monitoring 578 / AWS 548; zero technical skills lost outside the four gated generic terms, and hyphenated aliases restored (PCI-DSS, GPT-4, high-level design, multi-agent, Fine-tuning, Scikit-learn, Objective-C). Kept under `/tmp/opencode/lumina-step4` and `/tmp/opencode/lumina-step6`; default demo data and watermark untouched. Lever yielded zero jobs (all boards 404) |
+| Live pipeline evidence | **Scratch run only** (2026-11-07, keyless 6, run 4): 5 sources produced data, 3,518 Bronze → 3,269 Silver, 96 salaried (2.9%), 251 skills, 7 Gold marts. Step 6 rebuilt the same Bronze deterministically: 2,824 jobs with a technical skill, Gold demand 251 → 239 skills, top demand Python 588 / Monitoring 578 / AWS 548; zero technical skills lost outside the four gated generic terms, and hyphenated aliases restored (PCI-DSS, GPT-4, high-level design, multi-agent, Fine-tuning, Scikit-learn, Objective-C). Kept under `/tmp/opencode/lumina-step4` and `/tmp/opencode/lumina-step6` during the work; both scratch trees were deleted on 2026-11-08 after the Step 6 commit. Default demo data and watermark untouched. Lever yielded zero jobs (all boards 404) |
 | PostgreSQL | Provisioned in compose; zero application code uses it |
 | Scheduling | No cron, CI schedule, or Prefect deployment in the repository |
 | Frontend tests | None |
@@ -831,14 +831,13 @@ Evidence:
 ```bash
 PYTHONPATH=. uv run pytest tests/ -q          # 155 passed
 uv run ruff check src/ scripts/ tests/       # All checks passed
-# run 3 (scratch):
+# run 3 (scratch; files since removed):
 LUMINA_DATA_DIR=/tmp/opencode/lumina-step4/data \
 LUMINA_STATE_FILE=/tmp/opencode/lumina-step4/state/ingestion_state.json \
 PYTHONPATH=. uv run python /tmp/opencode/lumina-step4/run_stages.py
 ```
 
-Full report: `/tmp/opencode/lumina-step4/results.md`. Granular tracker:
-`/tmp/opencode/lumina-step4-plan.md` (both temporary, not committed).
+Full report and tracker were temporary and have been removed; their findings are recorded in this document.
 
 #### Step 5 — Skill-extraction precision — **COMPLETE (2026-11-07)**
 
@@ -939,7 +938,8 @@ Do not present live-ingested numbers as trustworthy until the P0 items are resol
 
 ## 11. Verification Commands and Evidence
 
-Commands used:
+Commands used. The Step 4–6 scratch directories, run logs, and checksum files were deleted on 2026-11-08; the recorded
+outputs below are retained as historical evidence and are not reproducible from committed artifacts.
 
 ```bash
 # 2026-11-04 audit baseline
@@ -988,11 +988,11 @@ PYTHONPATH=. uv run pytest \
 PYTHONPATH=. uv run python scripts/seed_data.py            # 800 jobs, 700 salaried, 7 marts
 ```
 
-Committed baseline (2026-11-07):
+Committed baseline (2026-11-08):
 
 ```bash
-git rev-list --count HEAD      # 7
-git log --oneline -1           # Step 5 skill-extraction precision
+git rev-list --count HEAD      # 8
+git log --oneline -1           # Step 6: Make Gold marts technical-only and gate generic skill terms
 git status --short             # clean
 ```
 
@@ -1116,9 +1116,10 @@ API observations:
 
 ## 12. Limitations of This Review
 
-- Live ingestion has been run once into scratch (2026-11-07, keyless 6, twice after fixes). It has **not** been run
-  against Adzuna/USAJobs or the default demo data, and the scratch run is not scheduled. The live numbers in this
-  document come from `/tmp/opencode/lumina-step4/results.md`, not from committed artifacts.
+- Live ingestion has been run into scratch (2026-11-07, keyless 6, multiple times after fixes). It has **not** been run
+  against Adzuna/USAJobs or the default demo data, and the scratch run is not scheduled. The scratch data and run
+  reports were deleted on 2026-11-08 after the Step 6 commit, so the live numbers in this document cannot be
+  re-inspected without re-running ingestion; they are not committed artifacts.
 - Related-skill uniqueness was re-measured in Step 1: the pre-Step 1 demo returned 6 unique skills from 10 entries,
   and the regenerated demo returns 7; the earlier “5 unique” figure was incorrect.
 - Adapter behavior was verified by reading the code and by targeted unit calls for most adapters; HackerNews was also
